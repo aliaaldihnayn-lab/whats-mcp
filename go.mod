@@ -1,4 +1,4 @@
-module github.com/sealjay/mcp-whatsapp
+module github.com/aliaaldihnayn-lab/whats-mcp
 
 go 1.26.0
 

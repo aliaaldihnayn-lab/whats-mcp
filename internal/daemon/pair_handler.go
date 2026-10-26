@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sealjay/mcp-whatsapp/internal/client"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/client"
 )
 
 //go:embed templates/*.tmpl

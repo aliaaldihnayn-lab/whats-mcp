@@ -9,7 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/sealjay/mcp-whatsapp/internal/client"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/client"
 )
 
 // registerMessageTools wires message-mutation and history tools:

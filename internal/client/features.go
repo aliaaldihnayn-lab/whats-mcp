@@ -12,7 +12,7 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 
-	"github.com/sealjay/mcp-whatsapp/internal/ratelimit"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/ratelimit"
 )
 
 // MarkRead marks messageIDs as read for the given chat. senderJID is the

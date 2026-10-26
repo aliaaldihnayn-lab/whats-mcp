@@ -6,7 +6,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/sealjay/mcp-whatsapp/internal/store"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/store"
 )
 
 // registerQueryTools wires read-only query tools: list_chats, get_chat,
@@ -18,6 +18,7 @@ func (s *Server) registerQueryTools() {
 	s.registerListChats()
 	s.registerGetChat()
 	s.registerGetMessageContext()
+	s.registerContactTools()
 	s.registerIsOnWhatsApp()
 	s.registerGetStatus()
 	s.registerPairingStatus()
@@ -331,4 +332,73 @@ func (s *Server) registerPairingStatus() {
 		}
 		return resultJSON(resp)
 	})
+}
+
+// -- contact-centric tools (ported from lharries/whatsapp-mcp) ---------------
+
+// contactDesc describes the contact argument shared by the three tools below.
+const contactDesc = "the contact: phone digits (country code included, e.g. `966501234567`; `+`, spaces and dashes are ignored), `<digits>@s.whatsapp.net`, or `<digits>@lid`; not a group JID"
+
+type contactArgs struct {
+	Contact string `json:"contact"`
+	Limit   int    `json:"limit,omitempty"`
+	Page    int    `json:"page,omitempty"`
+}
+
+func (s *Server) registerContactTools() {
+	direct := mcp.NewTool("get_direct_chat_by_contact",
+		mcp.WithDescription(offlineSafePrefix+"Find the cached 1:1 chat with a contact from their phone number or JID, resolving LID identities and partial numbers. Read-only; no side effects. Use search_contacts when you only know a name; use get_chat when you already have the chat JID. Returns a JSON chat object (jid, name, last-message metadata), or the JSON literal `null` when no direct chat is cached."),
+		mcp.WithString("contact", mcp.Required(), mcp.Description(contactDesc)),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.mcp.AddTool(direct, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a contactArgs) (*mcp.CallToolResult, error) {
+		chat, err := s.client.Store().GetDirectChatByContact(ctx, a.Contact)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if chat == nil {
+			return mcp.NewToolResultText("null"), nil
+		}
+		return resultJSON(chat)
+	}))
+
+	chats := mcp.NewTool("get_contact_chats",
+		mcp.WithDescription(offlineSafePrefix+"List every cached chat involving a contact: their 1:1 chat plus each group where they have sent a message, most recently active first. Read-only; no side effects. Use get_direct_chat_by_contact for the 1:1 chat only, or list_groups for all groups. Returns a JSON array of chat objects (jid, name, is_group, last-message metadata)."),
+		mcp.WithString("contact", mcp.Required(), mcp.Description(contactDesc)),
+		mcp.WithNumber("limit", mcp.DefaultNumber(20), mcp.Description("max chats to return (default 20, capped at 100)")),
+		mcp.WithNumber("page", mcp.DefaultNumber(0), mcp.Description("zero-based page index (default 0)")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.mcp.AddTool(chats, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a contactArgs) (*mcp.CallToolResult, error) {
+		res, err := s.client.Store().GetContactChats(ctx, a.Contact, a.Limit, a.Page)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return resultJSON(res)
+	}))
+
+	last := mcp.NewTool("get_last_interaction",
+		mcp.WithDescription(offlineSafePrefix+"Fetch the most recent cached message exchanged with a contact, whether in your 1:1 chat (sent or received) or sent by them in a group. Read-only; no side effects. Use list_messages with chat_jid for a longer history, or get_message_context to expand around the result. Returns a formatted text line for the message, or the JSON literal `null` when there is none."),
+		mcp.WithString("contact", mcp.Required(), mcp.Description(contactDesc)),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.mcp.AddTool(last, mcp.NewTypedToolHandler(func(ctx context.Context, _ mcp.CallToolRequest, a contactArgs) (*mcp.CallToolResult, error) {
+		m, err := s.client.Store().GetLastInteraction(ctx, a.Contact)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if m == nil {
+			return mcp.NewToolResultText("null"), nil
+		}
+		return mcp.NewToolResultText(s.client.Store().FormatMessagesList(ctx, []store.Message{*m}, true)), nil
+	}))
 }

@@ -16,8 +16,11 @@ var expectedToolNames = []string{
 	"edit_message",
 	"get_blocklist",
 	"get_chat",
+	"get_contact_chats",
+	"get_direct_chat_by_contact",
 	"get_group_info",
 	"get_group_invite_link",
+	"get_last_interaction",
 	"get_message_context",
 	"get_poll_results",
 	"get_privacy_settings",
@@ -116,7 +119,7 @@ func TestNewServer_RegistersAllTools(t *testing.T) {
 
 func TestNewServer_ToolCount(t *testing.T) {
 	s := NewServer(nil, nil)
-	const want = 42
+	const want = 45
 	if got := len(s.MCP().ListTools()); got != want {
 		t.Errorf("tool count = %d, want %d", got, want)
 	}

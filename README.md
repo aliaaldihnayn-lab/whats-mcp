@@ -1,29 +1,47 @@
 # WhatsApp MCP Server
 
-[![License: MIT](https://img.shields.io/github/license/Sealjay/mcp-whatsapp)](LICENSE)
-[![CI](https://github.com/Sealjay/mcp-whatsapp/actions/workflows/ci.yml/badge.svg)](https://github.com/Sealjay/mcp-whatsapp/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Sealjay/mcp-whatsapp)](https://goreportcard.com/report/github.com/Sealjay/mcp-whatsapp)
-[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CI](https://github.com/aliaaldihnayn-lab/whats-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/aliaaldihnayn-lab/whats-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/aliaaldihnayn-lab/whats-mcp)](https://github.com/aliaaldihnayn-lab/whats-mcp/releases/latest)
 [![MCP](https://img.shields.io/badge/MCP-protocol-6366f1)](https://modelcontextprotocol.io/)
-[![42 tools](https://img.shields.io/badge/tools-42-blue)]()
+[![45 tools](https://img.shields.io/badge/tools-45-blue)](#tools)
 [![whatsmeow](https://img.shields.io/badge/whatsmeow-multidevice-25D366?logo=whatsapp&logoColor=white)](https://github.com/tulir/whatsmeow)
-[![Sealjay/mcp-whatsapp MCP server](https://glama.ai/mcp/servers/Sealjay/mcp-whatsapp/badges/score.svg?)](https://glama.ai/mcp/servers/Sealjay/mcp-whatsapp)
-[![GitHub issues](https://img.shields.io/github/issues/Sealjay/mcp-whatsapp)](https://github.com/Sealjay/mcp-whatsapp/issues)
+
+**[اقرأ بالعربية](README.ar.md)**
 
 A single-binary Go [MCP](https://modelcontextprotocol.io/) server that wraps [whatsmeow](https://github.com/tulir/whatsmeow) to expose a personal WhatsApp account to LLMs. `whatsapp-mcp serve` runs as a lightweight HTTP daemon on `127.0.0.1:8765`; MCP clients (Claude Desktop, Cursor, Claude Code, etc.) connect to it via HTTP — no process spawning, no stdin/stdout juggling. Messages are cached in local SQLite and only travel to the model when the agent calls a tool.
 
 > **Unaffiliated.** This is an independent open-source project. It is not affiliated with, endorsed by, or otherwise associated with Meta Platforms, Inc., WhatsApp, or [whatsmeow](https://github.com/tulir/whatsmeow). "WhatsApp" is a trademark of Meta Platforms, Inc., used here nominatively to describe interoperability.
 
-This started as a fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) and has since been rewritten as a single Go binary. What it adds over the original:
+This project merges the two best-known WhatsApp MCP servers: the single-binary Go rewrite from [Sealjay/mcp-whatsapp](https://github.com/Sealjay/mcp-whatsapp) (itself a fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp)) plus the contact-centric tools that only the original had, and adds ready-made downloads and one-line installers so nobody needs Go or a C compiler. What it adds over the original:
+
+- **One-line install, no toolchain** — prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM) and Windows, with installers that also register a background service.
+- **Contact tools from the original, made LID-aware** — `get_direct_chat_by_contact`, `get_contact_chats` and `get_last_interaction` accept a phone number in any format (`+966 50-123 4567`), a JID or a `@lid` identity.
 
 - **LID resolution** — normalises `@lid` JIDs to real phone numbers for accurate contact matching.
 - **Sent-message storage** — outgoing messages are persisted locally so conversation history stays complete.
 - **Disappearing-message timers** — outgoing messages inherit the group chat's ephemeral timer automatically.
 - **Targeted history sync** — on-demand per-chat backfill via the `request_sync` tool.
-- **Extended tool surface** — 42 tools (see below): reactions, replies, edits, revoke, mark-read, typing, is-on-whatsapp, full group admin, blocklist, polls (create + vote + tally), contact cards, view-once flag, presence, privacy settings, and the profile "About" text.
+- **Extended tool surface** — 45 tools (see below): reactions, replies, edits, revoke, mark-read, typing, is-on-whatsapp, full group admin, blocklist, polls (create + vote + tally), contact cards, view-once flag, presence, privacy settings, and the profile "About" text.
 - **Single-instance enforcement** — a `flock(2)` on `store/.lock` prevents two `serve` processes racing on the same SQLite files.
 
-## Setup
+## Quick install
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aliaaldihnayn-lab/whats-mcp/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/aliaaldihnayn-lab/whats-mcp/main/scripts/install.ps1 | iex
+```
+
+The installer downloads the latest release, starts the daemon in the background (launchd / systemd / a logon scheduled task), and prints the next two steps: open `http://127.0.0.1:8765/pair` to scan the QR code, then point your MCP client at `http://127.0.0.1:8765/mcp` (see [Connect your MCP client](#connect-your-mcp-client)). Prefer to download by hand? Grab an archive from [Releases](https://github.com/aliaaldihnayn-lab/whats-mcp/releases/latest).
+
+## Build from source
 
 ### Prerequisites
 
@@ -35,8 +53,8 @@ This started as a fork of [lharries/whatsapp-mcp](https://github.com/lharries/wh
 ### Install
 
 ```bash
-git clone https://github.com/Sealjay/mcp-whatsapp.git
-cd mcp-whatsapp
+git clone https://github.com/aliaaldihnayn-lab/whats-mcp.git
+cd whatsapp-mcp
 make build    # writes ./bin/whatsapp-mcp
 ```
 
@@ -130,7 +148,7 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 
 ## Tools
 
-42 tools, grouped by purpose.
+45 tools, grouped by purpose.
 
 ### Read / query
 
@@ -141,6 +159,9 @@ Data lives under `./store/` (`-store DIR`): `messages.db` (message cache), `what
 | `list_chats` | List chats with last-message preview; sort by activity or name |
 | `get_chat` | Chat metadata by JID |
 | `get_message_context` | Before/after window around a specific message |
+| `get_direct_chat_by_contact` | 1:1 chat with a contact, from a phone number (any format), JID or LID |
+| `get_contact_chats` | Every chat involving a contact: their DM plus groups they posted in |
+| `get_last_interaction` | Most recent message exchanged with a contact, DM or group |
 | `download_media` | Download persisted media to a local path |
 | `request_sync` | Ask WhatsApp to backfill history for a chat |
 
@@ -266,6 +287,10 @@ For Claude Desktop integration issues, see the [MCP documentation](https://model
 ## Contributing
 
 Contributions welcome via pull request. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Credits
+
+Built on the work of [Luke Harries](https://github.com/lharries/whatsapp-mcp) and [Chris Lloyd-Jones](https://github.com/Sealjay/mcp-whatsapp), and on [whatsmeow](https://github.com/tulir/whatsmeow) by Tulir Asokan.
 
 ## Licence
 

@@ -7,7 +7,7 @@ import (
 
 	"go.mau.fi/whatsmeow/types"
 
-	"github.com/sealjay/mcp-whatsapp/internal/store"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/store"
 )
 
 // seedStoreWithChat opens a fresh store and inserts one chat plus (optionally)

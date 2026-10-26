@@ -8,8 +8,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/sealjay/mcp-whatsapp/internal/client"
-	"github.com/sealjay/mcp-whatsapp/internal/media"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/client"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/media"
 )
 
 // registerSendTools wires outbound-message tools: send_message, send_file,

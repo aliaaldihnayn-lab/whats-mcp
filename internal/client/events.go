@@ -13,8 +13,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
-	"github.com/sealjay/mcp-whatsapp/internal/security"
-	"github.com/sealjay/mcp-whatsapp/internal/store"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/security"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/store"
 )
 
 // StartEventHandler registers the event handler on the underlying whatsmeow

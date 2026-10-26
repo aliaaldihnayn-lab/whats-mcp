@@ -23,7 +23,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/sealjay/mcp-whatsapp/internal/ratelimit"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/ratelimit"
 )
 
 // rateLimitOverrideHeader is the HTTP header a human-configured MCP client can

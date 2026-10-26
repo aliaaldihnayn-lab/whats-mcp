@@ -15,9 +15,9 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
 
-	"github.com/sealjay/mcp-whatsapp/internal/media"
-	"github.com/sealjay/mcp-whatsapp/internal/ratelimit"
-	"github.com/sealjay/mcp-whatsapp/internal/store"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/media"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/ratelimit"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/store"
 )
 
 // SendResult is the public return value from Send/SendMediaWithOptions.

@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/sealjay/mcp-whatsapp/internal/client"
-	"github.com/sealjay/mcp-whatsapp/internal/daemon"
-	mcpsrv "github.com/sealjay/mcp-whatsapp/internal/mcp"
-	"github.com/sealjay/mcp-whatsapp/internal/security"
-	"github.com/sealjay/mcp-whatsapp/internal/store"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/client"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/daemon"
+	mcpsrv "github.com/aliaaldihnayn-lab/whats-mcp/internal/mcp"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/security"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/store"
 )
 
 func runServe(storeDir string, redactor *security.Redactor, args []string) int {

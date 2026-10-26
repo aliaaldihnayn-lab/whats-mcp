@@ -7,7 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/sealjay/mcp-whatsapp/internal/client"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/client"
 )
 
 // pairingCache is the minimal pairing-state surface pairing_status needs.

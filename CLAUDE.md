@@ -47,7 +47,7 @@ make upgrade-check
 
 ## Feature implementation map
 
-Tool surface is 42 tools, registered from `internal/mcp/tools.go` + `tools_groups.go` + `tools_media.go` + `tools_privacy.go`.
+Tool surface is 45 tools, registered from `internal/mcp/tools.go` + `tools_groups.go` + `tools_media.go` + `tools_privacy.go`.
 
 1. **LID Resolution** — `internal/store/lid.go`. Normalises `@lid` JIDs to real phone numbers via the `whatsmeow_lid_map` table.
 2. **Sent message storage** — `internal/client/send.go` persists outgoing messages after `SendMessage` returns.
@@ -58,6 +58,7 @@ Tool surface is 42 tools, registered from `internal/mcp/tools.go` + `tools_group
 7. **Blocklist** — `internal/client/features_blocklist.go`. `GetBlocklist`, `BlockContact`, `UnblockContact` wrap whatsmeow's `GetBlocklist` / `UpdateBlocklist` (no `dhash` caching: each call fetches the full list). `get_blocklist` keeps its `DHash`/`JIDs`/`Contacts` JSON shape; phones come from whatsmeow's `BlocklistItem.PN`, falling back to the LID map.
 8. **Polls + contact cards + view-once flag** — `internal/client/features_media.go` (poll send / vote / tally + contact-card send paths) plus `internal/client/vcard.go` (vCard 3.0 synthesis when no override supplied) and the `ViewOnce` option plumbed through `SendMediaOptions` in `internal/client/send.go`. `SendPoll` now uses `wa.BuildPollCreation` so the required `MessageSecret` is attached (without it, votes cannot be decrypted — this was silently broken before). Vote ingest + tally live in `internal/client/events.go::handlePollVote` and `internal/store/poll.go` (the new `poll_votes` table + `messages.poll_options_json` column).
 9. **Presence / privacy / status message** — `internal/client/features_privacy.go`. `SendPresence` (own availability), `GetPrivacySettings` / `SetPrivacySetting` with strict enum validation, `SetStatusMessage` for the "About" text.
+10. **Contact-centric lookups** — `internal/store/contact_queries.go` (ported from lharries/whatsapp-mcp): `get_direct_chat_by_contact`, `get_contact_chats`, `get_last_interaction`. `resolveContactIdentity` expands a phone/JID/LID into every chat JID and sender key the contact may be stored under.
 
 ## Versioning
 

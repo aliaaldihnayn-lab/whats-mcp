@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sealjay/mcp-whatsapp/internal/security"
+	"github.com/aliaaldihnayn-lab/whats-mcp/internal/security"
 	"go.mau.fi/whatsmeow"
 )
 
