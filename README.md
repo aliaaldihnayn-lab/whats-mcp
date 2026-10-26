@@ -25,6 +25,18 @@ This project merges the two best-known WhatsApp MCP servers: the single-binary G
 - **Extended tool surface** — 45 tools (see below): reactions, replies, edits, revoke, mark-read, typing, is-on-whatsapp, full group admin, blocklist, polls (create + vote + tally), contact cards, view-once flag, presence, privacy settings, and the profile "About" text.
 - **Single-instance enforcement** — a `flock(2)` on `store/.lock` prevents two `serve` processes racing on the same SQLite files.
 
+## Two ways to connect
+
+| | **Personal (this binary)** | **Official ([`web/`](web/README.md))** |
+|---|---|---|
+| Account | Any WhatsApp account, including personal | A WhatsApp Business number on Meta's Cloud API |
+| Reads | All chats and groups, with history | Messages received after connecting, plus Business-app echoes |
+| Runs on | Your computer | Your own Vercel project, always on |
+| Sanctioned by Meta | No (linked-device protocol) | Yes |
+| Tools | 45 | 12 |
+
+The rest of this page covers the personal mode. For the official mode, see [`web/README.md`](web/README.md).
+
 ## Quick install
 
 **macOS / Linux**
