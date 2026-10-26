@@ -10,8 +10,8 @@ const DEPLOY_URL =
     "repository-url": REPO,
     "root-directory": "web",
     "project-name": "whats-mcp-cloud",
-    env: "WHATSAPP_ACCESS_TOKEN,WHATSAPP_PHONE_NUMBER_ID,WHATSAPP_WABA_ID,META_APP_SECRET,WEBHOOK_VERIFY_TOKEN,MCP_SECRET",
-    envDescription: "Keys from your Meta app (WhatsApp > API Setup) plus two random secrets you choose.",
+    env: "MCP_SECRET,CRON_SECRET",
+    envDescription: "Two long random strings you choose (24+ characters). Meta keys for the official mode can be added later.",
     envLink: `${REPO}/blob/main/web/README.md`,
   }).toString();
 
@@ -27,6 +27,7 @@ export default function Home() {
           <nav aria-label="أقسام الصفحة">
             <a href="#compare">الفرق بين الطريقتين</a>
             <a href="#personal">على جهازك</a>
+            <a href="#personal-cloud">على فيرسل</a>
             <a href="#official">الربط الرسمي</a>
             <a href={REPO}>الكود</a>
           </nav>
@@ -115,7 +116,7 @@ export default function Home() {
                   </tr>
                   <tr>
                     <th scope="row">وين يشتغل</th>
-                    <td>برنامج صغير على كمبيوترك، لازم يكون شغال</td>
+                    <td>على كمبيوترك، أو على فيرسل باتصال عند الطلب</td>
                     <td>على فيرسل، شغال دائماً بدون جهازك</td>
                   </tr>
                   <tr>
@@ -175,6 +176,56 @@ export default function Home() {
             </div>
           </section>
 
+          <section id="personal-cloud" aria-labelledby="pc-h">
+            <div className="mode">
+              <div>
+                <h2 id="pc-h">حسابك الشخصي، بدون كمبيوتر</h2>
+                <p className="intro">
+                  نفس فكرة الجهاز المرتبط، لكن على فيرسل. ما تبقى متصلة دائماً: مع كل طلب من مساعدك تتصل لثواني، تسحب الرسائل الجديدة، وتقفل. مجانية على خطة Hobby.
+                </p>
+                <ol className="steps">
+                  <li>
+                    <strong>انشر نسختك</strong>
+                    <p>بالزر تحت، واختر كلمتين سر طويلتين لـ MCP_SECRET و CRON_SECRET.</p>
+                  </li>
+                  <li>
+                    <strong>أضف قاعدة البيانات</strong>
+                    <p>Storage ← Upstash Redis ← Connect، ثم أعد النشر. فيها تنحفظ جلسة الربط والرسائل.</p>
+                  </li>
+                  <li>
+                    <strong>اربط رقمك برمز</strong>
+                    <p>
+                      افتح <code>/personal</code> في نسختك، اكتب رقمك، وأدخل الرمز في جوالك من الأجهزة المرتبطة ← الربط برقم الهاتف.
+                    </p>
+                  </li>
+                  <li>
+                    <strong>أضفه لمساعدك</strong>
+                    <p>
+                      الرابط <code>/api/personal/mcp</code> مع كلمة السر.
+                    </p>
+                  </li>
+                </ol>
+              </div>
+              <div>
+                <p>
+                  <a className="btn solid" href={DEPLOY_URL}>
+                    انشر نسختك على فيرسل
+                  </a>
+                </p>
+                <div className="note">
+                  <p>
+                    الفرق عن نسخة الكمبيوتر: كل طلب ياخذ من 5 إلى 20 ثانية لأنه يتصل أول، و11 أداة بدل 45. والاتصال من سيرفرات بدل جوالك يرفع احتمال تقييد الرقم، فاستخدمه لحسابك وبحدود معقولة.
+                  </p>
+                </div>
+                <Code label="الإعداد في مساعدك">{`{ "mcpServers": { "whatsapp": {
+    "type": "http",
+    "url": "https://YOUR-APP.vercel.app/api/personal/mcp",
+    "headers": { "Authorization": "Bearer YOUR_MCP_SECRET" }
+} } }`}</Code>
+              </div>
+            </div>
+          </section>
+
           <section id="official" aria-labelledby="official-h">
             <div className="mode">
               <div>
@@ -191,7 +242,7 @@ export default function Home() {
                   </li>
                   <li>
                     <strong>انشر نسختك</strong>
-                    <p>اضغط الزر تحت، وعبّ المفاتيح اللي يطلبها فيرسل.</p>
+                    <p>بالزر تحت، وبعدها أضف مفاتيح Meta من Settings ← Environment Variables.</p>
                   </li>
                   <li>
                     <strong>أضف قاعدة البيانات</strong>

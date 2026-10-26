@@ -30,9 +30,9 @@ async function waitUp() {
   throw new Error("server did not start");
 }
 
-async function mcp(method, params, auth = true) {
-  console.log("mcp", method);
-  const res = await fetch(`${base}/api/mcp`, {
+async function mcp(method, params, auth = true, path = "/api/mcp") {
+  console.log("mcp", path, method);
+  const res = await fetch(`${base}${path}`, {
     method: "POST",
     signal: AbortSignal.timeout(15000),
     headers: {
@@ -95,6 +95,23 @@ try {
 
   const search = await mcp("tools/call", { name: "search_messages", arguments: { query: "friday" } });
   assert.ok(search.data.result.content[0].text.includes("wamid.e2e"));
+
+  // Personal mode (linked device): wiring, auth and Baileys loading, without a phone.
+  r = await fetch(`${base}/api/personal/status`);
+  assert.equal(r.status, 401);
+  r = await fetch(`${base}/api/personal/status`, { headers: { Authorization: `Bearer ${env.MCP_SECRET}` } });
+  assert.equal((await r.json()).paired, false);
+  assert.equal((await mcp("tools/list", {}, false, "/api/personal/mcp")).status, 401);
+  const ptools = (await mcp("tools/list", {}, true, "/api/personal/mcp")).data.result.tools.map((t) => t.name);
+  console.log("personal tools:", ptools.join(", "));
+  assert.equal(ptools.length, 11);
+  const st = await mcp("tools/call", { name: "get_status", arguments: {} }, true, "/api/personal/mcp");
+  assert.ok(st.data.result.content[0].text.includes('"paired": false'));
+  const sy = await mcp("tools/call", { name: "sync", arguments: {} }, true, "/api/personal/mcp");
+  assert.equal(sy.data.result.isError, true);
+  assert.ok(sy.data.result.content[0].text.includes("not linked"), sy.data.result.content[0].text);
+  assert.equal((await fetch(`${base}/personal`)).status, 200);
+  assert.equal((await fetch(`${base}/api/cron/sync`)).status, 401);
 
   console.log("e2e: all checks passed");
   stop();

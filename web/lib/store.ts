@@ -20,6 +20,8 @@ export type StoredMessage = {
   replyTo?: string;
   reaction?: { messageId: string; emoji: string };
   source?: "api" | "business_app"; // business_app = echo from the WhatsApp Business app (coexistence)
+  sender?: string; // personal mode: who wrote it (phone digits), for group messages
+  senderName?: string;
 };
 
 export type Conversation = {
@@ -47,47 +49,51 @@ const PER_CHAT_CAP = 2000;
 const TTL_SECONDS = 180 * 24 * 60 * 60; // keep message bodies for 180 days
 
 export class Store {
-  constructor(private kv: KV) {}
+  /** prefix keeps the official ("") and personal ("p:") caches apart in one Redis. */
+  constructor(
+    private kv: KV,
+    private p = "",
+  ) {}
 
   async saveMessage(m: StoredMessage) {
-    const existing = await this.kv.get<StoredMessage>(`m:${m.id}`);
+    const existing = await this.kv.get<StoredMessage>(`${this.p}m:${m.id}`);
     // A status webhook can arrive before our own write; keep the later status.
     const merged = existing ? { ...m, status: existing.status ?? m.status, error: existing.error ?? m.error } : m;
-    await this.kv.set(`m:${m.id}`, merged, { ex: TTL_SECONDS });
-    await this.kv.zadd(`c:${m.waId}`, { score: m.timestamp, member: m.id });
-    await this.kv.zremrangebyrank(`c:${m.waId}`, 0, -(PER_CHAT_CAP + 1));
-    await this.kv.zadd("convs", { score: m.timestamp, member: m.waId });
+    await this.kv.set(`${this.p}m:${m.id}`, merged, { ex: TTL_SECONDS });
+    await this.kv.zadd(`${this.p}c:${m.waId}`, { score: m.timestamp, member: m.id });
+    await this.kv.zremrangebyrank(`${this.p}c:${m.waId}`, 0, -(PER_CHAT_CAP + 1));
+    await this.kv.zadd(`${this.p}convs`, { score: m.timestamp, member: m.waId });
     if (m.direction === "in") {
-      const prev = (await this.kv.get<number>(`in:${m.waId}`)) ?? 0;
-      if (m.timestamp > prev) await this.kv.set(`in:${m.waId}`, m.timestamp);
+      const prev = (await this.kv.get<number>(`${this.p}in:${m.waId}`)) ?? 0;
+      if (m.timestamp > prev) await this.kv.set(`${this.p}in:${m.waId}`, m.timestamp);
     }
   }
 
   async setName(waId: string, name: string) {
-    if (name) await this.kv.set(`n:${waId}`, name);
+    if (name) await this.kv.set(`${this.p}n:${waId}`, name);
   }
 
   async updateStatus(id: string, status: string, error?: string) {
-    const m = await this.kv.get<StoredMessage>(`m:${id}`);
+    const m = await this.kv.get<StoredMessage>(`${this.p}m:${id}`);
     const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
     if (!m) {
       // Remember the status so saveMessage can merge it when our write lands.
-      await this.kv.set(`m:${id}`, { id, status, error }, { ex: 3600 });
+      await this.kv.set(`${this.p}m:${id}`, { id, status, error }, { ex: 3600 });
       return;
     }
     if ((rank[status] ?? 0) < (rank[m.status ?? ""] ?? 0) && status !== "failed") return;
-    await this.kv.set(`m:${id}`, { ...m, status, ...(error ? { error } : {}) }, { ex: TTL_SECONDS });
+    await this.kv.set(`${this.p}m:${id}`, { ...m, status, ...(error ? { error } : {}) }, { ex: TTL_SECONDS });
   }
 
   async getMessage(id: string) {
-    const m = await this.kv.get<StoredMessage>(`m:${id}`);
+    const m = await this.kv.get<StoredMessage>(`${this.p}m:${id}`);
     return m?.waId ? m : null;
   }
 
   async messages(waId: string, limit = 30, before?: number): Promise<StoredMessage[]> {
-    const ids = await this.kv.zrange<string[]>(`c:${waId}`, 0, Math.max(limit * 3, 60) - 1, { rev: true });
+    const ids = await this.kv.zrange<string[]>(`${this.p}c:${waId}`, 0, Math.max(limit * 3, 60) - 1, { rev: true });
     if (!ids.length) return [];
-    const rows = await this.kv.mget<(StoredMessage | null)[]>(...ids.map((id) => `m:${id}`));
+    const rows = await this.kv.mget<(StoredMessage | null)[]>(...ids.map((id) => `${this.p}m:${id}`));
     return rows
       .filter((m): m is StoredMessage => !!m && !!m.waId && (before === undefined || m.timestamp < before))
       .slice(0, limit)
@@ -95,18 +101,18 @@ export class Store {
   }
 
   async window(waId: string, now = Math.floor(Date.now() / 1000)) {
-    const lastIn = (await this.kv.get<number>(`in:${waId}`)) ?? undefined;
+    const lastIn = (await this.kv.get<number>(`${this.p}in:${waId}`)) ?? undefined;
     const closesAt = lastIn ? lastIn + WINDOW_SECONDS : undefined;
     return { lastInboundAt: lastIn, windowOpen: !!closesAt && closesAt > now, windowClosesAt: closesAt };
   }
 
   async conversations(limit = 20, query?: string, now = Math.floor(Date.now() / 1000)): Promise<Conversation[]> {
     const scan = query ? 500 : limit;
-    const waIds = await this.kv.zrange<string[]>("convs", 0, scan - 1, { rev: true });
+    const waIds = await this.kv.zrange<string[]>(`${this.p}convs`, 0, scan - 1, { rev: true });
     const out: Conversation[] = [];
     const q = query?.toLowerCase().replace(/^\+/, "");
     for (const waId of waIds) {
-      const name = (await this.kv.get<string>(`n:${waId}`)) ?? undefined;
+      const name = (await this.kv.get<string>(`${this.p}n:${waId}`)) ?? undefined;
       if (q && !waId.includes(q) && !(name ?? "").toLowerCase().includes(q)) continue;
       const [last] = (await this.messages(waId, 1)).slice(-1);
       const w = await this.window(waId, now);
@@ -119,7 +125,7 @@ export class Store {
   /** Substring search over the most recent messages of the most recent chats. */
   async search(query: string, limit = 20): Promise<StoredMessage[]> {
     const q = query.toLowerCase();
-    const waIds = await this.kv.zrange<string[]>("convs", 0, 99, { rev: true });
+    const waIds = await this.kv.zrange<string[]>(`${this.p}convs`, 0, 99, { rev: true });
     const hits: StoredMessage[] = [];
     for (const waId of waIds) {
       for (const m of await this.messages(waId, 200)) {

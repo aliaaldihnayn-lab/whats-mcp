@@ -1,8 +1,12 @@
-# Official mode: WhatsApp Cloud API MCP server on Vercel
+# whats-mcp on Vercel
 
-This folder is a Next.js app with two jobs:
+This folder is a Next.js app that hosts the landing page and two MCP servers:
 
-- `/` is the project's landing page.
+- `/api/personal/mcp`: your **personal** WhatsApp account as a linked device, connected on demand (see [Personal mode](#personal-mode-on-vercel) below).
+- `/api/mcp`: a **WhatsApp Business** number through Meta's official Cloud API (the rest of this section).
+
+## Official mode
+
 - `/api/mcp` is an MCP server for a **WhatsApp Business number**, using Meta's official [Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api). `/api/webhook` receives messages from Meta, and `/setup` shows what is configured.
 
 Unlike the local binary in the repo root, this mode is fully sanctioned by Meta, runs without your computer, and cannot read personal chats or groups.
@@ -50,9 +54,23 @@ Unlike the local binary in the repo root, this mode is fully sanctioned by Meta,
 
    Clients that only accept a URL can use `https://<your-app>.vercel.app/api/mcp?key=<MCP_SECRET>`; treat that URL like a password.
 
+## Personal mode on Vercel
+
+Serverless functions cannot hold WhatsApp's connection open, so this mode connects only when needed:
+
+1. A tool call takes a Redis lock (WhatsApp drops a device that connects twice), opens the linked-device session stored in Redis with [Baileys](https://github.com/WhiskeySockets/Baileys), and waits a few seconds while WhatsApp delivers everything queued since the last connection.
+2. It runs the action (read from cache, send, react, mark read, list groups), saves the updated signal keys, and disconnects.
+3. Read tools reuse the cache when it is under 2 minutes old. A daily cron (`/api/cron/sync`, needs `CRON_SECRET`) keeps the device from being unlinked for inactivity.
+
+Setup: deploy, connect Upstash Redis, set `MCP_SECRET` and `CRON_SECRET`, then open `/personal`, enter the secret and your number, and type the pairing code on your phone (*Linked devices → Link with phone number instead*). Connect clients to `https://<your-app>.vercel.app/api/personal/mcp`.
+
+Tools (11): `get_status`, `sync`, `list_chats`, `list_messages`, `search_messages`, `send_message`, `send_media`, `send_reaction`, `mark_read`, `list_groups`, `check_numbers`.
+
+Trade-offs versus the local binary: each call that connects takes ~5–20 s; history before linking is only what WhatsApp pushes during pairing; and connecting from datacenter IPs raises the chance WhatsApp restricts the number. It is not sanctioned by Meta: use it for your own account and keep volume low.
+
 ## Security
 
-- `/api/mcp` refuses every request until `MCP_SECRET` (24+ chars) is set, and then requires it.
+- `/api/mcp`, `/api/personal/*` refuse every request until `MCP_SECRET` (24+ chars) is set, and then requires it.
 - `/api/webhook` rejects any POST whose `X-Hub-Signature-256` does not match `META_APP_SECRET`, and ignores events for other numbers on the same WABA.
 - `/setup` shows only which variables are present; live checks require the secret.
 - Customer messages are untrusted input. The server's instructions tell the model to treat them as data and to confirm sends with you, but keep approval prompts on for send tools.

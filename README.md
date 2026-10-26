@@ -31,7 +31,7 @@ This project merges the two best-known WhatsApp MCP servers: the single-binary G
 |---|---|---|
 | Account | Any WhatsApp account, including personal | A WhatsApp Business number on Meta's Cloud API |
 | Reads | All chats and groups, with history | Messages received after connecting, plus Business-app echoes |
-| Runs on | Your computer | Your own Vercel project, always on |
+| Runs on | Your computer (or Vercel, connecting on demand: see [`web/`](web/README.md#personal-mode-on-vercel)) | Your own Vercel project, always on |
 | Sanctioned by Meta | No (linked-device protocol) | Yes |
 | Tools | 45 | 12 |
 

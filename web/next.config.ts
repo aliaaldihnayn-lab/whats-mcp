@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   poweredByHeader: false,
+  // Baileys loads a WebAssembly bridge at runtime; keep it out of the bundle.
+  serverExternalPackages: ["baileys", "whatsapp-rust-bridge", "pino", "libsignal"],
   async headers() {
     return [
       {

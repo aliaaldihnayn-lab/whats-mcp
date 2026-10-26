@@ -153,3 +153,21 @@ footer { border-top: 1px solid var(--line); padding: 32px 0 48px; color: var(--m
   .top nav { display: none; }
   .compare tbody th { width: 30%; }
 }
+
+/* ---------- personal link page ---------- */
+.panel { max-width: 640px; }
+.field { margin: 0 0 22px; }
+.field label { display: block; font-weight: 500; margin-bottom: 6px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row input { flex: 1 1 240px; font: 400 16px var(--mono); padding: 11px 14px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bubble-in); color: var(--ink); }
+.row input:focus { border-color: var(--accent); outline: none; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+button.btn { cursor: pointer; background: none; }
+button.btn.solid { background: var(--accent); }
+.err { color: #b3261e; }
+.muted { color: var(--muted); }
+.linked { padding: 16px 0 8px; }
+.pair-code { background: var(--bubble-out); border-radius: 18px; padding: 20px 22px; margin: 8px 0 24px; }
+.pair-code output { display: block; font: 700 clamp(34px, 7vw, 52px) var(--mono); letter-spacing: 0.08em; margin: 8px 0; text-align: center; }
+.snippet { background: var(--code-bg); color: var(--code-ink); border-radius: 14px; padding: 16px 18px; overflow-x: auto; font-size: 13.5px; text-align: left; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .err { color: #f2b8b5; } }
