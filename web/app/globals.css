@@ -332,7 +332,7 @@ h1, h2, h3 { font-family: var(--display); }
 
 /* pages still carry their own header and tab strip until they are migrated */
 .app-main > .wrap, .app-main .wrap.wide { max-width: none; padding: 0; }
-.app-main .top, .app-main .tabs { display: none; }
+.app-main .top { display: none; }
 .app-main section { border-top: 0; padding: 0; }
 .app-main h2 { font-size: clamp(26px, 3vw, 34px); margin-bottom: 8px; }
 .app-main h3 { font-size: 20px; font-weight: 600; margin: 28px 0 10px; }

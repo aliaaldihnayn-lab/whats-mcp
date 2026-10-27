@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import type { Action, Cond, Flow } from "@/lib/flows/types";
-import { Nav, SecretGate, call, errMsg, useCopy } from "../shared";
+import { call, errMsg, invalidate, useApi, useCopy, useSession } from "../shared";
 import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, PRESETS, blankFlow, newAction, type ActionType, type EF } from "./presets";
 
 type Account = { id: string; label: string; kind: "personal" | "official" };
@@ -17,32 +17,24 @@ const MODE_NOTE: Record<EF["mode"], string> = {
 };
 
 export function Flows() {
-  return (
-    <div className="dash-page">
-      <Nav current="flows" />
-      <SecretGate>{(secret) => <App secret={secret} />}</SecretGate>
-    </div>
-  );
+  const { secret } = useSession();
+  return <App secret={secret} />;
 }
 
+const PROVIDER_NAME = "الذكاء الاصطناعي";
+
 function App({ secret }: { secret: string }) {
-  const [data, setData] = useState<Data | null>(null);
+  const api = useApi<Data>("/api/personal/flows", { fresh: 20_000 });
+  const data = api.data;
   const [edit, setEdit] = useState<EF | null>(null);
   const [tab, setTab] = useState<"flows" | "log">("flows");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      setData(await call<Data>(secret, "/api/personal/flows"));
-    } catch (e) {
-      setError(errMsg(e));
-    }
-  }, [secret]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const load = async () => {
+    invalidate("/api/personal/flows");
+    await api.reload();
+  };
 
   const toEF = (f: Flow): EF => ({ ...f }) as EF;
 
@@ -61,6 +53,7 @@ function App({ secret }: { secret: string }) {
   }
 
   async function toggle(f: Flow) {
+    api.set((d) => ({ ...d!, flows: d!.flows.map((x) => (x.id === f.id ? { ...x, enabled: !f.enabled } : x)) }));
     await call(secret, "/api/personal/flows", { method: "PUT", body: { flow: { ...f, enabled: !f.enabled } } }).catch((e) => setError(errMsg(e)));
     await load();
   }
@@ -77,12 +70,20 @@ function App({ secret }: { secret: string }) {
     await load();
   }
 
-  if (!data) return <p className="muted">{error || "نحمّل…"}</p>;
+  if (!data)
+    return api.error || error ? (
+      <p className="err">{api.error || error}</p>
+    ) : (
+      <div style={{ display: "grid", gap: 12 }}>
+        <div className="skel" style={{ height: 44 }} />
+        <div className="skel" style={{ height: 260 }} />
+      </div>
+    );
 
   return (
     <>
       <div className="chips">
-        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ Claude جاهز (${data.ai.model}، حد يومي ${data.ai.dailyCap})` : "○ Claude غير مفعّل: أضف ANTHROPIC_API_KEY في فيرسل"}</span>
+        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ ${PROVIDER_NAME} جاهز (${[data.ai.claude && data.ai.model, data.ai.cheap && (data.ai.cheapModel ?? "OpenAI-compatible")].filter(Boolean).join(" + ")}، حد يومي ${data.ai.dailyCap})` : `○ ${PROVIDER_NAME} غير مفعّل: أضف مفتاح Anthropic أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL)`}</span>
         <span className={`chip ${data.paused ? "off" : "on"}`}>{data.paused ? "✗ كل الفلوات موقوفة" : "✓ الفلوات تشتغل"}</span>
         <button type="button" className="btn ghost small" onClick={() => pause(!data.paused)}>{data.paused ? "شغّل الكل" : "أوقف الكل فوراً"}</button>
       </div>
@@ -257,7 +258,7 @@ function Editor({ secret, data, value, saving, error, onSave, onDelete, onCancel
             </>
           )}
         </div>
-        {!isMsg && <p className="hint">الفلو المجدول ما له محادثة، فاستخدم "أرسل" و"Claude يجهز نص" وWebhook فقط. الجدول يتحقق وقت المزامنة.</p>}
+        {!isMsg && <p className="hint">الفلو المجدول ما له محادثة، فاستخدم "أرسل" و"الذكاء الاصطناعي يجهز نص" وWebhook فقط. الجدول يتحقق وقت المزامنة.</p>}
       </section>
 
       <section>
@@ -327,7 +328,7 @@ function Editor({ secret, data, value, saving, error, onSave, onDelete, onCancel
           <div className="grid2">
             <label>نص رسالة تجريبية<input value={sample.text} onChange={(e) => setSample({ ...sample, text: e.target.value })} /></label>
             <label>اسم المرسل<input value={sample.senderName} onChange={(e) => setSample({ ...sample, senderName: e.target.value })} /></label>
-            <label className="sw" style={{ alignSelf: "end" }}><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} disabled={!data.ai.configured} /> استدعِ Claude فعلاً (يحسب من استهلاكك)</label>
+            <label className="sw" style={{ alignSelf: "end" }}><input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} disabled={!data.ai.configured} /> استدعِ الذكاء الاصطناعي فعلاً (يحسب من استهلاكك)</label>
           </div>
           <button type="button" className="btn ghost" onClick={test} disabled={testing}>{testing ? "نجرب…" : "جرّب"}</button>
           {testError && <p className="err">{testError}</p>}
@@ -380,12 +381,12 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: { a: Act
           {cheapModel && (
             <label>المزود
               <select value={a.provider ?? ""} onChange={(e) => onChange({ ...a, provider: (e.target.value || undefined) as "claude" | "cheap" | undefined })}>
-                <option value="">الافتراضي</option><option value="claude">Claude</option><option value="cheap">الرخيص ({cheapModel})</option>
+                <option value="">الافتراضي</option><option value="claude">Anthropic</option><option value="cheap">متوافق مع OpenAI ({cheapModel})</option>
               </select>
             </label>
           )}
           <label className="sw small"><input type="checkbox" checked={a.confirm} onChange={(e) => onChange({ ...a, confirm: e.target.checked })} /> اطلب تأكيدي (\"نعم\") قبل التنفيذ</label>
-          <p className="hint">يستخدم الموصلات من صفحة قاعدة المعرفة. فقط رسائلك أنت (من رقمك) تُنفَّذ كمهام، ورد Claude يبدأ بـ 🤖 عشان ما يعيد نفسه.</p>
+          <p className="hint">يستخدم الموصلات من صفحة قاعدة المعرفة. فقط رسائلك أنت (من رقمك) تُنفَّذ كمهام، وردّه يبدأ بـ 🤖 عشان ما يعيد نفسه.</p>
         </div>
       );
     case "webhook":
@@ -399,8 +400,8 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: { a: Act
     case "ai":
       return (
         <>
-          {!aiOn && <p className="err small">أضف ANTHROPIC_API_KEY (أو مزود رخيص AI_COMPAT_*) في متغيرات فيرسل وأعد النشر.</p>}
-          <textarea aria-label="تعليمات Claude" value={a.prompt} onChange={(e) => onChange({ ...a, prompt: e.target.value })} placeholder={a.type === "ai_reply" ? `تعليمات لـ Claude. اتركها فاضية لهذا الافتراضي:\n${defaultPrompt}` : "وش تبي من Claude؟ مثل: لخّص رسائل اليوم"} />
+          {!aiOn && <p className="err small">أضف ANTHROPIC_API_KEY أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL: OpenAI أو DeepSeek أو Gemini أو OpenRouter أو Ollama…) في متغيرات فيرسل وأعد النشر.</p>}
+          <textarea aria-label="تعليمات الذكاء الاصطناعي" value={a.prompt} onChange={(e) => onChange({ ...a, prompt: e.target.value })} placeholder={a.type === "ai_reply" ? `تعليمات للذكاء الاصطناعي. اتركها فاضية لهذا الافتراضي:\n${defaultPrompt}` : "وش تبي من الذكاء الاصطناعي؟ مثل: لخّص رسائل اليوم"} />
           <div className="grid2">
             <label>كم رسالة من المحادثة يقرأ<input type="number" min={1} max={60} value={a.context} onChange={(e) => onChange({ ...a, context: Number(e.target.value) })} /></label>
             {a.type === "ai" && (
@@ -413,14 +414,14 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: { a: Act
             {cheapModel && (
               <label>المزود
                 <select value={a.provider ?? ""} onChange={(e) => onChange({ ...a, provider: (e.target.value || undefined) as "claude" | "cheap" | undefined })}>
-                  <option value="">الافتراضي</option><option value="claude">Claude</option><option value="cheap">الرخيص ({cheapModel})</option>
+                  <option value="">الافتراضي</option><option value="claude">Anthropic</option><option value="cheap">متوافق مع OpenAI ({cheapModel})</option>
                 </select>
               </label>
             )}
             <label>موديل (اختياري)<input dir="ltr" value={a.model ?? ""} placeholder="الافتراضي" onChange={(e) => onChange({ ...a, model: e.target.value || undefined })} /></label>
           </div>
           {a.type === "ai_reply" && <label className="sw small"><input type="checkbox" checked={a.quote} onChange={(e) => onChange({ ...a, quote: e.target.checked })} /> اقتبس رسالته</label>}
-          <p className="hint">{a.type === "ai_reply" ? "Claude يقرأ المحادثة وما يشوف فيها تعليمات، فنص الغرباء ما يقدر يغيّر قواعده. وإذا ما شاف رد مناسب يتجاهل الرسالة." : "الناتج يتخزن في {{ai}} وتستخدمه في أكشن بعده."}</p>
+          <p className="hint">{a.type === "ai_reply" ? "الذكاء الاصطناعي يقرأ المحادثة وما يشوف فيها تعليمات، فنص الغرباء ما يقدر يغيّر قواعده. وإذا ما شاف رد مناسب يتجاهل الرسالة." : "الناتج يتخزن في {{ai}} وتستخدمه في أكشن بعده."}</p>
         </>
       );
     default:
