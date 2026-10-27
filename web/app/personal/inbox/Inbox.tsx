@@ -180,9 +180,11 @@ function App({ secret, status }: { secret: string; status: Status }) {
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
             </Select>
             <input aria-label="بحث" placeholder="ابحث بالاسم أو الرقم" value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="seg" role="group" aria-label="القائمة">
+              <button type="button" aria-pressed={tab === "chats"} onClick={() => setTab("chats")}>المحادثات</button>
+              <button type="button" aria-pressed={tab === "drafts"} onClick={() => setTab("drafts")}>المسودات{pending ? ` (${pending})` : ""}</button>
+            </div>
             <div className="row">
-              <button type="button" className={`btn small ${tab === "chats" ? "solid" : "ghost"}`} onClick={() => setTab("chats")}>المحادثات</button>
-              <button type="button" className={`btn small ${tab === "drafts" ? "solid" : "ghost"}`} onClick={() => setTab("drafts")}>المسودات{pending ? ` (${pending})` : ""}</button>
               <button type="button" className="btn small ghost" onClick={sync} disabled={busy === "sync"}>{busy === "sync" ? "…" : "زامن"}</button>
               {kind === "personal" && (bf.running
                 ? <button type="button" className="btn small ghost" onClick={() => { stopBf.current = true; }}>إيقاف الجلب</button>
