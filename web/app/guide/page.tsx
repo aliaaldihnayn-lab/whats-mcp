@@ -20,7 +20,7 @@ const ENVS: [string, string, string][] = [
 ];
 
 const PROVIDERS: [string, string][] = [
-  ["DeepSeek", "https://api.deepseek.com/v1"],
+  ["DeepSeek", "https://api.deepseek.com"],
   ["Qwen (علي بابا، دولي)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
   ["Kimi (Moonshot)", "https://api.moonshot.ai/v1"],
   ["GLM (Z.AI)", "https://api.z.ai/api/paas/v4"],
@@ -102,7 +102,7 @@ export default function Guide() {
           <h3>الطريقة الأسهل: مزود رخيص مثل DeepSeek</h3>
           <ol className="steps">
             <li><strong>أنشئ مفتاح API</strong><p>من منصة DeepSeek (platform.deepseek.com). لا تشاركه مع أحد ولا ترسله في أي محادثة.</p></li>
-            <li><strong>أضف المتغيرات في Vercel</strong><p>مشروعك ← Settings ← Environment Variables، وأضف: <code>AI_COMPAT_URL</code> = <code>https://api.deepseek.com/v1</code>، و<code>AI_COMPAT_KEY</code> = مفتاحك، و<code>AI_COMPAT_MODEL</code> = اسم الموديل من لوحة DeepSeek (فئة Flash أرخص).</p></li>
+            <li><strong>أضف المتغيرات في Vercel</strong><p>مشروعك ← Settings ← Environment Variables، وأضف: <code>AI_COMPAT_URL</code> = <code>https://api.deepseek.com</code>، و<code>AI_COMPAT_KEY</code> = مفتاحك، و<code>AI_COMPAT_MODEL</code> = <code>deepseek-flash</code> (الأرخص، يدعم الأدوات والصور) أو <code>deepseek-v4-pro</code> (أقوى، بدون صور).</p></li>
             <li><strong>Redeploy</strong><p>من تبويب Deployments ← النقاط الثلاث على آخر نشر ← Redeploy.</p></li>
             <li><strong>تأكد</strong><p>افتح <code>/personal/flows</code> وتأكد إن شارة الذكاء صارت «جاهز». جرّب فلو بسيط قبل ما تفعّله تلقائياً.</p></li>
           </ol>
