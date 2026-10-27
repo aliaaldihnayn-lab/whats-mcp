@@ -1,6 +1,7 @@
 // Claude, called straight over HTTPS (no SDK) so flows can answer messages.
 
-export type AiRequest = { system: string; user: string; maxTokens: number; model?: string };
+export type Provider = "claude" | "cheap";
+export type AiRequest = { system: string; user: string; maxTokens: number; model?: string; provider?: Provider };
 export type AiClient = (req: AiRequest) => Promise<string>;
 
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -21,10 +22,47 @@ export function anthropicClient(apiKey: string, defaultModel = DEFAULT_MODEL, fe
   };
 }
 
-/** Built from the environment; undefined when no key is set. */
-export function aiFromEnv(env: Record<string, string | undefined> = process.env): AiClient | undefined {
-  return env.ANTHROPIC_API_KEY ? anthropicClient(env.ANTHROPIC_API_KEY, env.AI_MODEL || DEFAULT_MODEL) : undefined;
+/**
+ * Any OpenAI-compatible chat API (DeepSeek, Qwen/DashScope, Kimi/Moonshot, GLM, MiniMax, OpenRouter...):
+ * AI_COMPAT_URL (base, e.g. https://api.deepseek.com/v1), AI_COMPAT_KEY, AI_COMPAT_MODEL.
+ */
+export function compatClient(baseUrl: string, apiKey: string, defaultModel: string, fetchImpl: typeof fetch = fetch): AiClient {
+  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  return async ({ system, user, maxTokens, model }) => {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(45_000),
+      headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: model || defaultModel, max_tokens: maxTokens, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`AI provider ${res.status}: ${data?.error?.message ?? res.statusText}`);
+    const out = String(data?.choices?.[0]?.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    if (!out) throw new Error("The AI provider returned an empty answer");
+    return out;
+  };
 }
+
+/** Claude and/or the cheap provider. Each action picks one; the default is Claude, or the cheap one when it is the only one set. */
+export function aiFromEnv(env: Record<string, string | undefined> = process.env, fetchImpl: typeof fetch = fetch): AiClient | undefined {
+  const claude = env.ANTHROPIC_API_KEY ? anthropicClient(env.ANTHROPIC_API_KEY, env.AI_MODEL || DEFAULT_MODEL, fetchImpl) : undefined;
+  const cheap = env.AI_COMPAT_URL && env.AI_COMPAT_KEY && env.AI_COMPAT_MODEL ? compatClient(env.AI_COMPAT_URL, env.AI_COMPAT_KEY, env.AI_COMPAT_MODEL, fetchImpl) : undefined;
+  if (!claude && !cheap) return undefined;
+  const fallback: Provider = env.AI_DEFAULT_PROVIDER === "cheap" && cheap ? "cheap" : claude ? "claude" : "cheap";
+  return (req) => {
+    const want = req.provider ?? fallback;
+    const client = want === "cheap" ? cheap ?? claude! : claude ?? cheap!;
+    const usingCheap = client === cheap && client !== claude;
+    // A model name typed for Claude must not be sent to another provider.
+    return client({ ...req, model: want === "cheap" || usingCheap ? (req.provider === "cheap" ? req.model : undefined) : req.model });
+  };
+}
+
+export const aiStatus = (env: Record<string, string | undefined> = process.env) => ({
+  claude: !!env.ANTHROPIC_API_KEY,
+  cheap: !!(env.AI_COMPAT_URL && env.AI_COMPAT_KEY && env.AI_COMPAT_MODEL),
+  cheapModel: env.AI_COMPAT_MODEL,
+});
 
 export type AgentFile = { name: string; mime: string; bytes: Buffer; url?: string; text?: string };
 export type AgentRequest = AiRequest & { files?: AgentFile[]; servers: { name: string; url: string; token?: string }[] };

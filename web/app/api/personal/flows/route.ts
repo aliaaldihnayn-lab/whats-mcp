@@ -1,7 +1,7 @@
 import { admin, err } from "@/lib/admin";
 import { target, targets } from "@/lib/inbox";
 import { isPaired, MemoryRawKV } from "@/lib/wa/auth";
-import { aiFromEnv, DEFAULT_MODEL, DEFAULT_REPLY_PROMPT } from "@/lib/flows/ai";
+import { aiFromEnv, aiStatus, DEFAULT_MODEL, DEFAULT_REPLY_PROMPT } from "@/lib/flows/ai";
 import { testFlow, type Channel } from "@/lib/flows/engine";
 import { deleteFlow, isPaused, listFlows, readLog, reorderFlows, saveFlow, setPaused } from "@/lib/flows/storage";
 import { FIELDS, FlowInput, OPS, type Flow } from "@/lib/flows/types";
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
   return Response.json({
     flows: await listFlows(a.base),
     paused: await isPaused(a.base),
-    ai: { configured: !!process.env.ANTHROPIC_API_KEY, model: process.env.AI_MODEL || DEFAULT_MODEL, dailyCap: Number(process.env.AI_MAX_PER_DAY) || 300, defaultPrompt: DEFAULT_REPLY_PROMPT },
+    ai: { configured: aiStatus().claude || aiStatus().cheap, claude: aiStatus().claude, cheap: aiStatus().cheap, cheapModel: aiStatus().cheapModel, model: process.env.AI_MODEL || DEFAULT_MODEL, dailyCap: Number(process.env.AI_MAX_PER_DAY) || 300, defaultPrompt: DEFAULT_REPLY_PROMPT },
     accounts,
     fields: FIELDS,
     ops: OPS,

@@ -186,7 +186,7 @@ async function evalCond(c: Cond, x: Ctx, d: EngineDeps): Promise<CondResult> {
   const value = c.value === undefined ? undefined : String(c.value);
   const base = { field: c.field, op: c.op, value };
   if (c.field === "ai") {
-    if (!d.ai) return { ...base, ok: false, note: "ANTHROPIC_API_KEY is not set" };
+    if (!d.ai) return { ...base, ok: false, note: "no AI key is set" };
     if (!(await takeAi(d, x.now))) return { ...base, ok: false, note: "daily AI limit reached" };
     try {
       const out = await d.ai({
@@ -267,7 +267,7 @@ async function runAi(a: Extract<Action, { type: "ai" | "ai_reply" }>, x: Ctx, d:
     if (kb) system += `\n\n${KNOWLEDGE_RULES}\n\n<knowledge>\n${kb}\n</knowledge>`;
   }
   const task = a.type === "ai_reply" ? "Write my next reply to the last message from the other person." : "Do what the instructions above ask, using the conversation(s).";
-  const out = await d.ai({ system, user: `<conversation>\n${transcript}\n</conversation>\n\n${task}`, maxTokens: a.maxTokens, model: a.model });
+  const out = await d.ai({ system, user: `<conversation>\n${transcript}\n</conversation>\n\n${task}`, maxTokens: a.maxTokens, model: a.model, provider: a.provider });
   return out.trim();
 }
 

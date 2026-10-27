@@ -72,7 +72,7 @@ export async function POST(req: Request) {
     }
     if (b.op === "ask") {
       const ai = aiFromEnv();
-      if (!ai) return err("Add ANTHROPIC_API_KEY in Vercel first.", 503);
+      if (!ai) return err("Add an AI key (ANTHROPIC_API_KEY or AI_COMPAT_*) in Vercel first.", 503);
       const q = (b.q ?? "").slice(0, 1000);
       const ctx = await knowledgeContext(a.base, q);
       if (!ctx) return err("The knowledge base is empty.", 400);

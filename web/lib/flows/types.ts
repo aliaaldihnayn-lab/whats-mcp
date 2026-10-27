@@ -24,6 +24,8 @@ const text = z.string().min(1).max(4096);
 const aiFields = {
   prompt: z.string().max(4000).default(""),
   model: z.string().max(80).optional(),
+  /** claude (default) or the cheap OpenAI-compatible provider set in the environment */
+  provider: z.enum(["claude", "cheap"]).optional(),
   context: z.number().int().min(1).max(60).default(12),
   maxTokens: z.number().int().min(64).max(2000).default(500),
   /** chat = the conversation that triggered the flow; recent = every chat with news in the last `hours`. */

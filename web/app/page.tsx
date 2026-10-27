@@ -132,7 +132,7 @@ export default function Home() {
                   </li>
                 </ol>
                 <p>
-                  <strong>لتفعيل Claude داخل واتساب:</strong> أضف <code>ANTHROPIC_API_KEY</code> في إعدادات Vercel ثم أعد النشر. التكلفة حسب الاستخدام.
+                  <strong>لتفعيل Claude داخل واتساب:</strong> أضف <code>ANTHROPIC_API_KEY</code> في إعدادات Vercel ثم أعد النشر. وللردود والملخصات تقدر تضيف مزود أرخص (DeepSeek أو Qwen أو Kimi أو GLM) بثلاث متغيرات: <code>AI_COMPAT_URL</code> و <code>AI_COMPAT_KEY</code> و <code>AI_COMPAT_MODEL</code>، وتختار المزود لكل فلو. المساعد اللي ينفذ بالأدوات يحتاج Claude.
                 </p>
               </div>
               <div>

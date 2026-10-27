@@ -291,3 +291,25 @@ test("assistant receives photos and files: kept for the confirmed task, readable
   assert.match(seen[0].files[0].url, /^https:\/\/app\.example\.com\/api\/files\/[a-f0-9]{16}\?t=[a-f0-9]{32}$/);
   assert.match(seen[0].user, /منتج جديد/);
 });
+
+test("cheap OpenAI-compatible provider: routed per action, model names never leak across providers", async () => {
+  const { aiFromEnv } = await import("./flows/ai");
+  const hits: { url: string; body: any; auth?: string }[] = [];
+  const f = (async (url: any, init: any) => {
+    hits.push({ url: String(url), body: JSON.parse(init.body), auth: init.headers.Authorization });
+    const claude = String(url).includes("anthropic");
+    return new Response(JSON.stringify(claude ? { content: [{ type: "text", text: "from claude" }] } : { choices: [{ message: { content: "<think>x</think>from cheap" } }] }), { status: 200 });
+  }) as typeof fetch;
+  const env = { ANTHROPIC_API_KEY: "k1", AI_COMPAT_URL: "https://api.deepseek.com/v1/", AI_COMPAT_KEY: "k2", AI_COMPAT_MODEL: "deepseek-chat" };
+  const ai = aiFromEnv(env, f)!;
+  assert.equal(await ai({ system: "s", user: "u", maxTokens: 50 }), "from claude");
+  assert.equal(await ai({ system: "s", user: "u", maxTokens: 50, provider: "cheap", model: "claude-sonnet-5-5" }), "from cheap");
+  assert.equal(hits[1].url, "https://api.deepseek.com/v1/chat/completions");
+  assert.equal(hits[1].body.model, "claude-sonnet-5-5"); // typed on purpose for the cheap provider
+  assert.equal(hits[1].auth, "Bearer k2");
+  // only the cheap one configured: Claude-named models are dropped
+  const only = aiFromEnv({ AI_COMPAT_URL: env.AI_COMPAT_URL, AI_COMPAT_KEY: "k2", AI_COMPAT_MODEL: "deepseek-chat" }, f)!;
+  await only({ system: "s", user: "u", maxTokens: 50, model: "claude-sonnet-5-5" });
+  assert.equal(hits[2].body.model, "deepseek-chat");
+  assert.equal(aiFromEnv({}, f), undefined);
+});

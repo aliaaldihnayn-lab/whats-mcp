@@ -7,7 +7,7 @@ import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, PRESETS, blankFlow, newA
 
 type Account = { id: string; label: string; kind: "personal" | "official" };
 type Log = { t: number; account: string; accountLabel?: string; flow: string; name: string; chat: string; chatName?: string; text?: string; status: string; note?: string; actions: { type: string; ok: boolean; detail?: string }[] };
-type Data = { flows: Flow[]; paused: boolean; ai: { configured: boolean; model: string; dailyCap: number; defaultPrompt: string }; accounts: Account[]; fields: string[]; ops: string[]; log: Log[] };
+type Data = { flows: Flow[]; paused: boolean; ai: { configured: boolean; claude?: boolean; cheap?: boolean; cheapModel?: string; model: string; dailyCap: number; defaultPrompt: string }; accounts: Account[]; fields: string[]; ops: string[]; log: Log[] };
 type TestResult = { triggered: boolean; matched: boolean; conditions: { field: string; op: string; value?: string; ok: boolean; note?: string }[]; actions: { type: string; ok: boolean; detail?: string }[] };
 
 const MODE_NOTE: Record<EF["mode"], string> = {
@@ -297,7 +297,7 @@ function Editor({ secret, data, value, saving, error, onSave, onDelete, onCancel
           <div className="act" key={i}>
             <div className="body">
               <strong>{ACTION_LABEL[a.type]}</strong>
-              <ActionFields a={a} onChange={(x) => setAction(i, x)} defaultPrompt={data.ai.defaultPrompt} aiOn={data.ai.configured} />
+              <ActionFields a={a} onChange={(x) => setAction(i, x)} defaultPrompt={data.ai.defaultPrompt} aiOn={data.ai.configured} cheapModel={data.ai.cheap ? data.ai.cheapModel ?? "cheap" : undefined} />
             </div>
             <button type="button" className="btn ghost small" aria-label="احذف الأكشن" onClick={() => set("actions", f.actions.filter((_, j) => j !== i))}>×</button>
           </div>
@@ -353,7 +353,7 @@ function Editor({ secret, data, value, saving, error, onSave, onDelete, onCancel
   );
 }
 
-function ActionFields({ a, onChange, defaultPrompt, aiOn }: { a: Action; onChange: (a: Action) => void; defaultPrompt: string; aiOn: boolean }) {
+function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: { a: Action; onChange: (a: Action) => void; defaultPrompt: string; aiOn: boolean; cheapModel?: string }) {
   switch (a.type) {
     case "reply":
       return (
@@ -392,7 +392,7 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn }: { a: Action; onChang
     case "ai":
       return (
         <>
-          {!aiOn && <p className="err small">أضف ANTHROPIC_API_KEY في متغيرات فيرسل وأعد النشر عشان يشتغل Claude.</p>}
+          {!aiOn && <p className="err small">أضف ANTHROPIC_API_KEY (أو مزود رخيص AI_COMPAT_*) في متغيرات فيرسل وأعد النشر.</p>}
           <textarea aria-label="تعليمات Claude" value={a.prompt} onChange={(e) => onChange({ ...a, prompt: e.target.value })} placeholder={a.type === "ai_reply" ? `تعليمات لـ Claude. اتركها فاضية لهذا الافتراضي:\n${defaultPrompt}` : "وش تبي من Claude؟ مثل: لخّص رسائل اليوم"} />
           <div className="grid2">
             <label>كم رسالة من المحادثة يقرأ<input type="number" min={1} max={60} value={a.context} onChange={(e) => onChange({ ...a, context: Number(e.target.value) })} /></label>
@@ -403,6 +403,13 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn }: { a: Action; onChang
             )}
             {a.type === "ai" && a.scope === "recent" && <label>آخر كم ساعة<input type="number" min={1} max={168} value={a.hours} onChange={(e) => onChange({ ...a, hours: Number(e.target.value) })} /></label>}
             <label>أقصى طول للجواب<input type="number" min={64} max={2000} value={a.maxTokens} onChange={(e) => onChange({ ...a, maxTokens: Number(e.target.value) })} /></label>
+            {cheapModel && (
+              <label>المزود
+                <select value={a.provider ?? ""} onChange={(e) => onChange({ ...a, provider: (e.target.value || undefined) as "claude" | "cheap" | undefined })}>
+                  <option value="">الافتراضي</option><option value="claude">Claude</option><option value="cheap">الرخيص ({cheapModel})</option>
+                </select>
+              </label>
+            )}
             <label>موديل (اختياري)<input dir="ltr" value={a.model ?? ""} placeholder="الافتراضي" onChange={(e) => onChange({ ...a, model: e.target.value || undefined })} /></label>
           </div>
           {a.type === "ai_reply" && <label className="sw small"><input type="checkbox" checked={a.quote} onChange={(e) => onChange({ ...a, quote: e.target.checked })} /> اقتبس رسالته</label>}

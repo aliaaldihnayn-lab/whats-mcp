@@ -1,3 +1,4 @@
+import { aiStatus } from "@/lib/flows/ai";
 import { admin } from "@/lib/admin";
 import { listAccounts } from "@/lib/wa/accounts";
 import { isPaired } from "@/lib/wa/auth";
@@ -19,7 +20,7 @@ export async function GET(req: Request) {
   return Response.json({
     accounts,
     storage: !!a.cfg.redisUrl,
-    ai: !!process.env.ANTHROPIC_API_KEY,
+    ai: aiStatus().claude || aiStatus().cheap,
     cron: !!process.env.CRON_SECRET,
     official: !!a.cfg.accessToken && !!a.cfg.phoneNumberId,
     flowsPaused: await isPaused(a.base),
