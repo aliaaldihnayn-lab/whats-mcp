@@ -1,5 +1,6 @@
 import { Code } from "@/components/Code";
 import { Mark, Seal } from "@/components/Mark";
+import { Secrets } from "@/components/Secrets";
 
 const REPO = "https://github.com/aliaaldihnayn-lab/whats-mcp";
 const RAW = "https://raw.githubusercontent.com/aliaaldihnayn-lab/whats-mcp/main";
@@ -13,6 +14,8 @@ const DEPLOY_URL =
     env: "MCP_SECRET,CRON_SECRET",
     envDescription: "Two long random strings you choose (24+ characters). Meta keys for the official mode can be added later.",
     envLink: `${REPO}/blob/main/web/README.md`,
+    // Creates the Upstash Redis database during the deploy, so there is no separate storage step.
+    stores: JSON.stringify([{ type: "integration", integrationSlug: "upstash", productSlug: "upstash-kv", protocol: "storage" }]),
   }).toString();
 
 const FEATURES: { title: string; text: string; items?: string[]; badge?: string }[] = [
@@ -41,10 +44,12 @@ export default function Home() {
           </a>
           <nav aria-label="أقسام الصفحة">
             <a href="#features">الخصائص</a>
+            <a href="/guide">دليل الإعداد</a>
             <a href="#start">ابدأ</a>
             <a href="#modes">الطرق</a>
             <a href="#safety">الأمان</a>
             <a href={REPO}>الكود</a>
+            <a className="btn solid" href="/personal">افتح النظام</a>
           </nav>
         </header>
 
@@ -56,8 +61,9 @@ export default function Home() {
                 يقرأ رسائلك، يرد عن عملائك من هلب سنترك، وينفذ مهامك ويرسل لك التقارير. كل هذا من واتساب نفسه، بدون ما تفتح Claude.
               </p>
               <div className="actions">
-                <a className="btn solid" href={DEPLOY_URL}>انشر نسختك مجاناً</a>
-                <a className="btn ghost" href="#features">شوف الخصائص</a>
+                <a className="btn solid" href="/personal">افتح النظام</a>
+                <a className="btn ghost" href={DEPLOY_URL}>انشر نسختك مجاناً</a>
+                <a className="btn ghost" href="/guide">دليل الإعداد الكامل</a>
               </div>
             </div>
 
@@ -109,41 +115,48 @@ export default function Home() {
           <section id="start" aria-labelledby="start-h">
             <div className="mode">
               <div>
-                <h2 id="start-h">ابدأ في 4 خطوات</h2>
-                <p className="intro">الطريقة الأسهل: نسخة خاصة فيك على Vercel. مجانية، وتشتغل بدون جهازك.</p>
+                <h2 id="start-h">ابدأ في 5 خطوات بسيطة</h2>
+                <p className="intro">نسخة خاصة فيك على Vercel. مجانية، وتشتغل بدون جهازك، وبياناتك عندك.</p>
                 <ol className="steps">
                   <li>
-                    <strong>انشر نسختك</strong>
-                    <p>بالزر، واختر كلمتي سر طويلتين (24 حرف أو أكثر) لـ MCP_SECRET و CRON_SECRET.</p>
+                    <strong>ولّد كلمتي السر</strong>
+                    <p>بالزر تحت. انسخهم واحفظهم، تحتاجهم في الخطوة الثانية.</p>
                   </li>
                   <li>
-                    <strong>أضف قاعدة البيانات</strong>
-                    <p>Storage ← Upstash Redis ← Connect، ثم أعد النشر.</p>
+                    <strong>اضغط «انشر نسختك»</strong>
+                    <p>سجّل في Vercel بحساب GitHub، والصق كلمتي السر. قاعدة البيانات تنضاف معه تلقائياً.</p>
                   </li>
                   <li>
-                    <strong>اربط رقمك</strong>
+                    <strong>افتح النظام واربط رقمك</strong>
                     <p>
-                      افتح <code>/personal</code>، اكتب رقمك، وأدخل الرمز في واتساب من الأجهزة المرتبطة ← الربط برقم الهاتف.
+                      افتح <code>/personal</code> في نسختك، اكتب رقمك، وأدخل الرمز في واتساب من الأجهزة المرتبطة.
+                    </p>
+                  </li>
+                  <li>
+                    <strong>أضف مفتاح الذكاء</strong>
+                    <p>
+                      DeepSeek الأرخص، أو Claude. التفاصيل في <a href="/guide#s3">الدليل</a>. وتختبره بزر واحد من لوحة التحكم.
                     </p>
                   </li>
                   <li>
                     <strong>الصق الرابط في Claude</strong>
-                    <p>من صفحة الأرقام والمفاتيح أنشئ مفتاح لجهازك وانسخ الرابط الجاهز.</p>
+                    <p>من لوحة التحكم أنشئ مفتاح جهاز وانسخ الرابط الجاهز.</p>
                   </li>
                 </ol>
                 <p>
-                  <strong>لتفعيل الذكاء داخل واتساب:</strong> أضف <code>ANTHROPIC_API_KEY</code> في إعدادات Vercel ثم أعد النشر، أو استخدم مزود رخيص بدله. للردود والملخصات تقدر تضيف مزود أرخص (DeepSeek أو Qwen أو Kimi أو GLM) بثلاث متغيرات: <code>AI_COMPAT_URL</code> و <code>AI_COMPAT_KEY</code> و <code>AI_COMPAT_MODEL</code>، وتختار المزود لكل فلو. المساعد اللي ينفذ بالأدوات يشتغل بالمزود الرخيص أيضاً (اختر نموذج يدعم استدعاء الأدوات)، وClaude أدق في الأدوات. لقراءة الصور بالمزود الرخيص أضف <code>AI_COMPAT_VISION=1</code> لو نموذجه يدعم الرؤية.
+                  تحتاج تفاصيل أكثر؟ <a href="/guide">دليل الإعداد الكامل</a>.
                 </p>
               </div>
               <div>
+                <Secrets />
                 <p>
-                  <a className="btn solid" href={DEPLOY_URL}>انشر نسختك على Vercel</a>
+                  <a className="btn solid" href={DEPLOY_URL}>انشر نسختك على Vercel</a>{" "}
+                  <a className="btn ghost" href="/personal">افتح النظام</a>
                 </p>
                 <Code label="الرابط الجاهز لمساعدك (تنسخه من لوحة التحكم)">{`https://YOUR-APP.vercel.app/api/personal/mcp?key=wmk_…`}</Code>
-                <Code label="أو في Claude Code">{`claude mcp add --transport http whatsapp "https://YOUR-APP.vercel.app/api/personal/mcp?key=wmk_…"`}</Code>
                 <div className="note">
                   <p>
-                    مع كل طلب تتصل النسخة لثواني، تسحب الجديد وتقفل، فالطلب ياخذ من 5 إلى 20 ثانية. الفلوات تشتغل عند كل مزامنة، ومرة باليوم على الأقل من Vercel، وأسرع لو ربطت خدمة نبض خارجية بـ <code>/api/cron/sync</code>.
+                    مع كل طلب تتصل النسخة لثواني وتسحب الجديد، فالطلب ياخذ 5 إلى 20 ثانية. على Vercel المجاني تشتغل المزامنة المجدولة مرة باليوم، ولردود أسرع اربط خدمة نبض خارجية (التفاصيل في الدليل).
                   </p>
                 </div>
               </div>

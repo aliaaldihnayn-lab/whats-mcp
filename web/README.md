@@ -5,6 +5,18 @@ This folder is a Next.js app that hosts the landing page and two MCP servers:
 - `/api/personal/mcp`: your **personal** WhatsApp account as a linked device, connected on demand (see [Personal mode](#personal-mode-on-vercel) below).
 - `/api/mcp`: a **WhatsApp Business** number through Meta's official Cloud API (the rest of this section).
 
+## Quick start (personal account on Vercel)
+
+1. **Deploy.** Click *Deploy* on the landing page. It creates your own Vercel project and an Upstash Redis database. Enter two random passwords (the landing page has a button that generates them in your browser): `MCP_SECRET` and `CRON_SECRET`.
+2. **Turn off Deployment Protection** (Project Settings → Deployment Protection → Vercel Authentication off for production), otherwise Claude cannot reach your URL.
+3. **Add an AI key** (optional but needed for replies, summaries and the WhatsApp assistant), then redeploy:
+   - cheap: `AI_COMPAT_URL=https://api.deepseek.com`, `AI_COMPAT_KEY=<key>`, `AI_COMPAT_MODEL=deepseek-flash` (+ `AI_COMPAT_VISION=1` if the model reads images), or
+   - Claude: `ANTHROPIC_API_KEY=<key>`.
+4. **Open `/personal`**, enter `MCP_SECRET`, link your number with the pairing code, and press *Test AI* to check the key and model name.
+5. **Connect your assistant:** create a device key in `/personal` and paste the ready-made URL (`.../api/personal/mcp?key=wmk_...`) into Claude, Cursor or Claude Code.
+
+Full walkthrough with every variable and troubleshooting: `/guide` on your deployment. Handing the system to a customer: [docs/CUSTOMERS.md](../docs/CUSTOMERS.md).
+
 ## Official mode
 
 - `/api/mcp` is an MCP server for a **WhatsApp Business number**, using Meta's official [Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api). `/api/webhook` receives messages from Meta, and `/setup` shows what is configured.
@@ -64,7 +76,7 @@ Serverless functions cannot hold WhatsApp's connection open, so this mode connec
 
 Setup: deploy, connect Upstash Redis, set `MCP_SECRET` and `CRON_SECRET`, then open `/personal`, enter the secret and your number, and type the pairing code on your phone (*Linked devices → Link with phone number instead*). Connect clients to `https://<your-app>.vercel.app/api/personal/mcp`.
 
-Tools (11): `get_status`, `sync`, `list_chats`, `list_messages`, `search_messages`, `send_message`, `send_media`, `send_reaction`, `mark_read`, `list_groups`, `check_numbers`.
+Tools (12): `list_accounts`, `get_status`, `sync`, `list_chats`, `list_messages`, `search_messages`, `send_message`, `send_media`, `send_reaction`, `mark_read`, `list_groups`, `check_numbers`.
 
 Trade-offs versus the local binary: each call that connects takes ~5–20 s; history before linking is only what WhatsApp pushes during pairing; and connecting from datacenter IPs raises the chance WhatsApp restricts the number. It is not sanctioned by Meta: use it for your own account and keep volume low.
 
