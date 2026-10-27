@@ -10,7 +10,8 @@ import type { Connector } from "../connectors";
 import type { Attachment, Loaded } from "../files";
 import { extractFile } from "../kb/extract";
 import { pushLog, readQueue, saveDraft, writeQueue } from "./storage";
-import type { Action, Cond, Flow, LogEntry } from "./types";
+import { successors } from "./graph";
+import type { Action, Cond, Flow, Graph, LogEntry } from "./types";
 
 export type Channel = {
   account: string;
@@ -371,9 +372,10 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
 
 // ---------- actions ----------
 
-type ActionResult = { type: string; ok: boolean; detail?: string };
+/** `node` is set for graph flows, so the editor can mark which nodes ran. */
+type ActionResult = { type: string; ok: boolean; detail?: string; node?: string };
 
-async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"]): Promise<{ results: ActionResult[]; status: LogEntry["status"]; stop: boolean }> {
+async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"], actions: Action[] = flow.actions): Promise<{ results: ActionResult[]; status: LogEntry["status"]; stop: boolean }> {
   const results: ActionResult[] = [];
   let status: LogEntry["status"] = mode === "dry" ? "dry" : "ok";
   let stop = false;
@@ -399,7 +401,7 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"])
     return `sent${id ? ` (${id})` : ""}`;
   };
 
-  for (const a of flow.actions) {
+  for (const a of actions) {
     try {
       let detail = "";
       switch (a.type) {
@@ -493,6 +495,56 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"])
   return { results, status, stop };
 }
 
+
+// ---------- graph flows ----------
+
+const MAX_STEPS = 60;
+
+/**
+ * Walks a node graph from the trigger. A condition node sends the message down its "true" or "false" wires;
+ * an action node runs and then continues down "next". A node reached by two wires runs once. When an action
+ * fails, only the wires after it stop; other branches go on. `gate` is asked once, right before the first
+ * action would run, so a flow whose conditions never lead to an action costs no rate-limit budget and is not logged.
+ */
+async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow["mode"], gate?: () => Promise<string | null>) {
+  const results: ActionResult[] = [];
+  let status: LogEntry["status"] = mode === "dry" ? "dry" : "ok";
+  let stop = false;
+  let acted = false;
+  let skipped: string | undefined;
+  let steps = 0;
+  const visited = new Set<string>();
+
+  const walk = async (nodes: ReturnType<typeof successors>): Promise<void> => {
+    for (const n of nodes) {
+      if (skipped || visited.has(n.id) || ++steps > MAX_STEPS) continue;
+      visited.add(n.id);
+      if (n.kind === "condition") {
+        const r = await matches({ ...flow, match: n.match, conditions: n.conditions }, x, d);
+        const why = r.results.map((c) => `${c.ok ? "✓" : "✗"} ${c.field} ${c.op}${c.value ? ` ${c.value}` : ""}${c.note ? ` (${c.note})` : ""}`).join("; ");
+        results.push({ type: "condition", ok: true, node: n.id, detail: `${r.ok ? "true" : "false"}: ${why}` });
+        await walk(successors(g, n.id, r.ok ? "true" : "false"));
+      } else if (n.kind === "action") {
+        if (!acted && gate) {
+          skipped = (await gate()) ?? undefined;
+          if (skipped) continue;
+        }
+        acted = true;
+        const r = await runActions(flow, x, d, mode, [n.action]);
+        results.push(...r.results.map((x) => ({ ...x, node: n.id })));
+        if (r.status === "error") status = "error";
+        else if (r.status === "draft" && status !== "error") status = "draft";
+        if (r.stop) stop = true;
+        if (r.status !== "error") await walk(successors(g, n.id, "next"));
+      }
+    }
+  };
+
+  const trigger = g.nodes.find((n) => n.kind === "trigger");
+  if (trigger) await walk(successors(g, trigger.id, "next"));
+  return { results, status, stop, acted, skipped };
+}
+
 // ---------- running ----------
 
 function logBase(flow: Flow, x: Ctx, d: EngineDeps): LogEntry {
@@ -505,8 +557,15 @@ async function guards(flow: Flow, x: Ctx, d: EngineDeps): Promise<string | null>
   return null;
 }
 
-async function fire(flow: Flow, x: Ctx, d: EngineDeps): Promise<{ entry: LogEntry; stop: boolean }> {
+async function fire(flow: Flow, x: Ctx, d: EngineDeps): Promise<{ entry: LogEntry; stop: boolean } | null> {
   const entry = logBase(flow, x, d);
+  if (flow.graph) {
+    const r = await runGraph(flow, flow.graph, x, d, flow.mode, () => guards(flow, x, d));
+    if (r.skipped) return { entry: { ...entry, status: "skipped", note: r.skipped, actions: r.results }, stop: false };
+    if (!r.acted) return null; // the message took a branch that ends without an action
+    if (flow.cooldownSeconds && x.chat && flow.mode !== "dry") await d.state.set(`flow:cd:${flow.id}:${x.chat}`, "1", { ex: flow.cooldownSeconds });
+    return { entry: { ...entry, status: r.status, actions: r.results }, stop: r.stop || flow.stopOnMatch };
+  }
   const why = await guards(flow, x, d);
   if (why) return { entry: { ...entry, status: "skipped", note: why }, stop: false };
   const r = await runActions(flow, x, d, flow.mode);
@@ -537,9 +596,10 @@ async function processMessage(m: StoredMessage, d: EngineDeps, now: number): Pro
       if (!(await matches(flow, x, d)).ok) continue;
       // Mark before acting: a crash must never lead to a second reply.
       if (!(await d.state.set(`flow:seen:${flow.id}:${m.id}`, "1", { ex: 7 * 86400, nx: true }))) continue;
-      const { entry, stop } = await fire(flow, x, d);
-      logs.push(entry);
-      if (stop) break;
+      const fired = await fire(flow, x, d);
+      if (!fired) continue;
+      logs.push(fired.entry);
+      if (fired.stop) break;
     } catch (e) {
       logs.push({ ...logBase(flow, x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
     }
@@ -560,7 +620,8 @@ async function runSchedules(d: EngineDeps, now: number): Promise<LogEntry[]> {
     await d.state.set(key, String(now), { ex: 30 * 86400 });
     const x = makeCtx(flow, d, now);
     try {
-      logs.push((await fire(flow, x, d)).entry);
+      const fired = await fire(flow, x, d);
+      if (fired) logs.push(fired.entry);
     } catch (e) {
       logs.push({ ...logBase(flow, x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
     }
@@ -611,6 +672,8 @@ export async function testFlow(flow: Flow, sample: TestSample, d: EngineDeps, no
   const x = makeCtx(flow, d, now, msg, sample.senderName, []);
   const triggered = flow.trigger.type === "message" ? triggerMatches({ ...flow, activeFrom: 0 }, msg, now) : true;
   const m = await matches(flow, x, d, true);
-  const run = triggered && m.ok ? await runActions(flow, x, { ...d, flows: [] }, "dry") : { results: [], status: "dry" as const, stop: false };
-  return { triggered, matched: triggered && m.ok, conditions: m.results, actions: run.results };
+  const dry = { ...d, flows: [] };
+  const run = triggered && m.ok ? (flow.graph ? await runGraph(flow, flow.graph, x, dry, "dry") : { ...(await runActions(flow, x, dry, "dry")), acted: true }) : { results: [], status: "dry" as const, stop: false, acted: false };
+  // Graph flows put their condition nodes in `actions` as { type: "condition" } rows, in the order they were reached.
+  return { triggered, matched: triggered && m.ok && run.acted, conditions: m.results, actions: run.results };
 }
