@@ -7,7 +7,7 @@ const KEY = "whats-mcp-secret";
 
 export function readSecret() {
   try {
-    return sessionStorage.getItem(KEY) ?? "";
+    return sessionStorage.getItem(KEY) ?? localStorage.getItem(KEY) ?? "";
   } catch {
     return "";
   }
@@ -56,7 +56,9 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
   const [show, setShow] = useState(false);
   const [restoring, setRestoring] = useState(true);
 
-  const load = useCallback(async (s: string) => {
+  const [remember, setRemember] = useState(false);
+
+  const load = useCallback(async (s: string, keep?: boolean) => {
     setBusy(true);
     setError("");
     try {
@@ -65,8 +67,15 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
       setSecret(s);
       try {
         sessionStorage.setItem(KEY, s);
+        // undefined: restoring a saved secret, leave the device copy as it is
+        if (keep === true) localStorage.setItem(KEY, s);
+        else if (keep === false) localStorage.removeItem(KEY);
       } catch {}
     } catch (e) {
+      try {
+        sessionStorage.removeItem(KEY);
+        localStorage.removeItem(KEY);
+      } catch {}
       setStatus(null);
       setSecret("");
       setError(errMsg(e));
@@ -95,13 +104,13 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
         className="gate-card"
         onSubmit={(e) => {
           e.preventDefault();
-          void load(input.trim());
+          void load(input.trim(), remember);
         }}
       >
         <a className="mark" href="/"><Mark /> واتساب MCP</a>
         <div>
           <h1>لوحة التحكم</h1>
-          <p className="muted">ادخل بكلمة السر <code>MCP_SECRET</code> اللي حطيتها في إعدادات فيرسل. تنحفظ في هذا التبويب بس، وتنمسح لما تقفله.</p>
+          <p className="muted">ادخل بكلمة السر <code>MCP_SECRET</code> اللي حطيتها في إعدادات فيرسل. تنحفظ في هذا التبويب بس، إلا إذا اخترت تذكرني.</p>
         </div>
         <label htmlFor="secret">كلمة السر</label>
         <div className="gate-input">
@@ -122,6 +131,10 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
             {show ? "إخفاء" : "إظهار"}
           </button>
         </div>
+        <label className="check">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          تذكرني على هذا الجهاز
+        </label>
         {error && <p id="secret-error" className="banner bad" role="alert">{error === "Wrong or missing MCP_SECRET." ? "كلمة السر غلط. تأكد إنها نفس قيمة MCP_SECRET في فيرسل." : error}</p>}
         <button className="btn solid" type="submit" disabled={busy || input.trim().length < 24}>
           {busy ? <span className="spinner" aria-hidden="true" /> : null}
