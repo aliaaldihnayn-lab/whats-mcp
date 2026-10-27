@@ -27,3 +27,17 @@
 
 ## التحديثات
 نسخة العميل ربطت بنسخة من المستودع عند النشر. للتحديث: GitHub ← Sync fork (أو أعد النشر من المستودع الأصلي)، وVercel يعيد البناء تلقائياً.
+
+## أتمتة إنشاء مشروع عميل (عندما تديره في حسابك أو فريقك)
+سكربت يسوي مشروع Vercel جديد من هذا المستودع بمتغيراته، ويطفي حماية النشر، وينشره:
+
+```bash
+export VERCEL_TOKEN=...            # Vercel > Settings > Tokens
+export CUSTOMER_AI_KEY=...         # مفتاح الذكاء الخاص بالعميل (متغير بيئة، مو وسيط)
+node web/scripts/new-customer.mjs --name acme --ai deepseek [--team team_xxx] [--dry-run]
+# مع قاعدة جاهزة: --redis-url https://... مع REDIS_TOKEN=...
+```
+- يولّد `MCP_SECRET` و`CRON_SECRET` ويطبعهم **مرة وحدة** في آخر المخرجات لتسلمهم للعميل.
+- لو ما مرّرت قاعدة Redis، اربطها من Vercel ← المشروع ← Storage ← Upstash Redis ← Connect ثم Redeploy. **لا تشارك قاعدة بين عميلين.**
+- جرّب أول مرة بـ `--dry-run` (ما ينشئ شي).
+- ملاحظة شروط: خطة Hobby للاستخدام غير التجاري. لإدارة مشاريع عملاء مدفوعين في حسابك تحتاج Pro.
