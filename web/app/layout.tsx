@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "واتساب MCP",
-  description: "اربط واتساب بمساعدك الذكي: على جهازك لحسابك الشخصي، أو رسمياً عبر Meta لحساب الأعمال.",
+  description: "اربط واتساب بـ Claude: يقرأ رسائلك، يرد عنك، ينفذ مهامك ويرسل لك التقارير. لحسابك الشخصي أو رقم الأعمال.",
 };
 
 export const viewport: Viewport = {
@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
           rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Reem+Kufi:wght@500;700&family=Readex+Pro:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
         />
       </head>
       <body>{children}</body>

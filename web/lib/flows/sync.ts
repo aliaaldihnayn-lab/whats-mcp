@@ -8,6 +8,7 @@ import { markRead, meDigits, sendReaction, sendText } from "../wa/ops";
 import { toJid, withWhatsApp } from "../wa/session";
 import { agentFromEnv, aiFromEnv } from "./ai";
 import { listConnectors } from "../connectors";
+import { fileUrl, loadFile, publicBase, saveFile } from "../files";
 import { knowledgeContext } from "../kb/store";
 import { runFlows, type Channel, type EngineDeps } from "./engine";
 import { flowsFor, isPaused } from "./storage";
@@ -45,8 +46,8 @@ export async function syncAccount(base: RawKV, a: AccountDeps, opts: { maxMs?: n
     maxMs: opts.maxMs ?? 60_000,
     ...(active
       ? {
-          afterDrain: async ({ sock, fresh, deadline }) => {
-            const deps: EngineDeps = { flows, state: a.raw, store: a.store, channel: personalChannel(sock, a), ai, agent: agentFromEnv(), connectors: () => listConnectors(base), deadline, knowledge: (q) => knowledgeContext(base, q), ...engineLimits() };
+          afterDrain: async ({ sock, fresh, files, deadline }) => {
+            const deps: EngineDeps = { flows, state: a.raw, store: a.store, channel: personalChannel(sock, a), ai, agent: agentFromEnv(), connectors: () => listConnectors(base), downloads: files, fileStore: { save: (b, m, n) => saveFile(base, b, m, n), load: (id) => loadFile(base, id), url: (f) => fileUrl(publicBase(), f) }, deadline, knowledge: (q) => knowledgeContext(base, q), ...engineLimits() };
             await runFlows(deps, fresh);
           },
         }

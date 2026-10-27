@@ -5,7 +5,7 @@
 // runs the requested action, saves the updated keys and disconnects. Nothing
 // stays running between calls.
 
-import makeWASocket, { Browsers, DisconnectReason, type WAMessage, type WASocket } from "baileys";
+import makeWASocket, { Browsers, DisconnectReason, downloadMediaMessage, type WAMessage, type WASocket } from "baileys";
 import pino from "pino";
 import type { Store, StoredMessage } from "../store";
 import { clearAuth, redisAuthState, type RawKV } from "./auth";
@@ -87,7 +87,10 @@ export function toStored(msg: WAMessage): StoredMessage | null {
   return out;
 }
 
-async function ingest(store: Store, messages: WAMessage[], fresh?: StoredMessage[]) {
+export type Downloaded = { bytes: Buffer; mime: string; name: string };
+const MEDIA_TYPES = new Set(["image", "video", "audio", "document", "sticker"]);
+
+async function ingest(store: Store, messages: WAMessage[], fresh?: StoredMessage[], grab?: { sock: () => WASocket; files: Map<string, Downloaded> }) {
   let n = 0;
   for (const msg of messages) {
     const s = toStored(msg);
@@ -97,6 +100,16 @@ async function ingest(store: Store, messages: WAMessage[], fresh?: StoredMessage
     await store.saveMessage(s);
     if (s.senderName && !s.waId.endsWith("@g.us")) await store.setName(s.waId, s.senderName);
     if (isNew) fresh!.push(s);
+    // Your own files (to the assistant) are downloaded now, while the connection is open.
+    if (isNew && grab && s.direction === "out" && MEDIA_TYPES.has(s.type)) {
+      try {
+        const bytes = (await downloadMediaMessage(msg, "buffer", {}, { logger: pino({ level: "silent" }) as any, reuploadRequest: grab.sock().updateMediaMessage })) as Buffer;
+        const ext = (s.mime ?? "").split("/")[1]?.split(";")[0] || "bin";
+        grab.files.set(s.id, { bytes, mime: s.mime ?? "application/octet-stream", name: s.filename || `${s.type}-${s.id.slice(0, 6)}.${ext}` });
+      } catch (e) {
+        console.error("media download failed", e);
+      }
+    }
     n++;
   }
   return n;
@@ -114,7 +127,7 @@ export type RunOptions = {
    * connection still open. `fresh` lists messages that arrived live since the
    * last connection. Failures here never fail the sync.
    */
-  afterDrain?: (ctx: { sock: WASocket; fresh: StoredMessage[]; deadline: number }) => Promise<void>;
+  afterDrain?: (ctx: { sock: WASocket; fresh: StoredMessage[]; files: Map<string, Downloaded>; deadline: number }) => Promise<void>;
 };
 
 export type RunResult<T> = { result: T; ingested: number };
@@ -155,6 +168,7 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
   let ingested = 0;
   const fresh: StoredMessage[] = [];
   const track = opts.afterDrain ? fresh : undefined;
+  const files = new Map<string, Downloaded>();
   let lastEvent = Date.now();
   const work = new Set<Promise<unknown>>();
   const bg = (p: Promise<unknown>) => {
@@ -173,7 +187,7 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
   sock.ev.on("creds.update", auth.saveCreds);
   sock.ev.on("messages.upsert", ({ messages, type }) => {
     lastEvent = Date.now();
-    bg(ingest(store, messages, type === "notify" ? track : undefined).then((n) => (ingested += n)));
+    bg(ingest(store, messages, type === "notify" ? track : undefined, type === "notify" && track ? { sock: () => sock, files } : undefined).then((n) => (ingested += n)));
   });
   sock.ev.on("messaging-history.set", ({ messages, contacts }) => {
     lastEvent = Date.now();
@@ -216,7 +230,7 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
     if (opts.afterDrain) {
       while (work.size) await Promise.allSettled([...work]);
       try {
-        await opts.afterDrain({ sock, fresh, deadline: deadline - 6_000 });
+        await opts.afterDrain({ sock, fresh, files, deadline: deadline - 6_000 });
       } catch (e) {
         console.error("flows failed", e);
       }

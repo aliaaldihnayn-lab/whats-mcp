@@ -268,3 +268,26 @@ test("assistant: plan first, run tools only after the owner says yes, ignore str
   await runFlows(s.deps, [stranger], NOW);
   assert.equal(calls.length, 1);
 });
+
+test("assistant receives photos and files: kept for the confirmed task, readable by Claude and by a link", async () => {
+  const { saveFile, loadFile, fileUrl } = await import("./files");
+  const ME = "966500000099@s.whatsapp.net";
+  const raw = new MemoryRawKV();
+  const fileStore = { save: (b: Buffer, m: string, n: string) => saveFile(raw, b, m, n), load: (id: string) => loadFile(raw, id), url: (f: any) => fileUrl("https://app.example.com", f) };
+  const flow = mkFlow({ trigger: { type: "message", direction: "out", chats: "direct" }, conditions: [{ field: "self_chat", op: "is_true" }], actions: [{ type: "agent" } as any] });
+  const seen: any[] = [];
+  const agent = async (r: any) => (seen.push(r), "تم");
+  const s = setup([flow], { ai: async () => "الخطة", agent, fileStore, connectors: async () => [] });
+  const big = Buffer.alloc(900_000, 7); // spans several Redis chunks
+  s.deps.downloads = new Map([["img1", { bytes: big, mime: "image/jpeg", name: "shirt.jpg" }]]);
+  const own = (over: Partial<StoredMessage>) => msg({ waId: ME, direction: "out", ...over });
+
+  await runFlows(s.deps, [own({ id: "img1", type: "image", mime: "image/jpeg", text: undefined, caption: "منتج جديد 120 ريال" })], NOW);
+  assert.match(s.sent[0].text, /^🤖/);
+  await runFlows(s.deps, [own({ id: "yes1", text: "نعم" })], NOW);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].files.length, 1);
+  assert.equal(seen[0].files[0].bytes.length, 900_000);
+  assert.match(seen[0].files[0].url, /^https:\/\/app\.example\.com\/api\/files\/[a-f0-9]{16}\?t=[a-f0-9]{32}$/);
+  assert.match(seen[0].user, /منتج جديد/);
+});

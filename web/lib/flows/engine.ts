@@ -5,8 +5,10 @@
 import type { RawKV } from "../wa/auth";
 import type { Store, StoredMessage } from "../store";
 import { assertPublicUrl } from "../net";
-import { AGENT_PROMPT, DEFAULT_REPLY_PROMPT, GUARD, KNOWLEDGE_RULES, SKIP, type AgentClient, type AiClient } from "./ai";
+import { AGENT_PROMPT, DEFAULT_REPLY_PROMPT, GUARD, KNOWLEDGE_RULES, SKIP, type AgentClient, type AgentFile, type AiClient } from "./ai";
 import type { Connector } from "../connectors";
+import type { Attachment, Loaded } from "../files";
+import { extractFile } from "../kb/extract";
 import { pushLog, readQueue, saveDraft, writeQueue } from "./storage";
 import type { Action, Cond, Flow, LogEntry } from "./types";
 
@@ -32,6 +34,9 @@ export type EngineDeps = {
   /** Claude with tools (connectors) for the agent action */
   agent?: AgentClient;
   connectors?: () => Promise<Connector[]>;
+  /** files you sent in this connection (agent action) */
+  downloads?: Map<string, { bytes: Buffer; mime: string; name: string }>;
+  fileStore?: { save(bytes: Buffer, mime: string, name: string): Promise<Attachment>; load(id: string): Promise<Loaded | null>; url(a: Attachment): string };
   aiDailyCap?: number;
   chatHourlyCap?: number;
   paused?: boolean;
@@ -297,43 +302,70 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
   // Message flow: owner only, never reacts to its own replies.
   if (x.msg.direction !== "out") return "ignored (only your own messages can give tasks)";
   const text = bodyOf(x.msg).trim();
-  if (!text || text.startsWith("🤖")) return "ignored (assistant message)";
+  if (text.startsWith("🤖")) return "ignored (assistant message)";
   const pendingKey = `agent:pending:${x.chat}`;
   const raw = await d.state.get(pendingKey);
-  let waiting: { task: string } | null = null;
+  let waiting: { task: string; files: Attachment[] } | null = null;
   try {
     waiting = raw ? JSON.parse(raw) : null;
+    if (waiting) waiting.files ??= [];
   } catch {}
 
-  if (waiting && YES.test(text)) {
+  // A file (photo, PDF, anything) sent with the message.
+  const files: Attachment[] = [];
+  if (MEDIA.has(x.msg.type)) {
+    const got = d.downloads?.get(x.msg.id);
+    if (!got || !d.fileStore) return await answer("ما قدرت أستلم الملف. أرسله مرة ثانية.");
+    try {
+      files.push(await d.fileStore.save(got.bytes, got.mime, got.name));
+    } catch (e) {
+      return await answer(`ما أقدر أستلم هذا الملف: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  const run = async (task: string, atts: Attachment[]) => {
     if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
-    await d.state.del(pendingKey);
-    const out = await d.agent({ system: sys, user: `<task>\n${waiting.task}\n</task>`, maxTokens: a.maxTokens, model: a.model, servers });
+    const loaded: AgentFile[] = [];
+    for (const f of atts) {
+      const l = await d.fileStore?.load(f.id);
+      if (!l) continue;
+      let t: string | undefined;
+      if (/^text\/|json|csv|markdown|xml/.test(l.mime) || /\.(txt|md|csv|json|html?)$/i.test(l.name) || /wordprocessingml|\.docx$/i.test(l.name + l.mime)) {
+        t = await extractFile(l.name, new Uint8Array(l.bytes), l.mime).then((r) => r.text, () => undefined);
+      }
+      loaded.push({ name: l.name, mime: l.mime, bytes: l.bytes, url: d.fileStore!.url(l), text: t });
+    }
+    const out = await d.agent!({ system: sys, user: `<task>\n${task || "(see the attachments)"}\n</task>`, maxTokens: a.maxTokens, model: a.model, servers, files: loaded });
     x.vars.ai = out;
     return await answer(out);
+  };
+
+  if (waiting && files.length && !text) {
+    waiting.files.push(...files);
+    if (mode !== "dry") await d.state.set(pendingKey, JSON.stringify(waiting), { ex: 1800 });
+    return await answer(`أضفت الملف (${waiting.files.length}). رد "نعم" للتنفيذ.`);
+  }
+  if (waiting && YES.test(text)) {
+    await d.state.del(pendingKey);
+    return await run(waiting.task, waiting.files);
   }
   if (waiting && NO.test(text)) {
     await d.state.del(pendingKey);
     return await answer("تم الإلغاء.");
   }
   if (YES.test(text) || NO.test(text)) return "ignored (nothing waiting for confirmation)";
+  if (!text && !files.length) return "ignored (empty)";
 
-  const task = text;
-  if (!a.confirm) {
-    if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
-    const out = await d.agent({ system: sys, user: `<task>\n${task}\n</task>`, maxTokens: a.maxTokens, model: a.model, servers });
-    x.vars.ai = out;
-    return await answer(out);
-  }
+  if (!a.confirm) return await run(text, files);
   if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
   const tools = servers.length ? servers.map((s) => s.name).join(", ") : "none connected";
   const plan = await d.ai({
-    system: `You plan tasks for the owner's assistant. Tools available: ${tools}. In the owner's language, in at most 6 short lines, say what you will do step by step, and what you still need from them if something is missing. End with: رد "نعم" للتنفيذ أو "لا" للإلغاء. Never claim to have done anything yet.`,
-    user: `<task>\n${task}\n</task>`,
+    system: `You plan tasks for the owner's assistant. Tools available: ${tools}. In the owner's language, in at most 6 short lines, say what you will do step by step, and what you still need from them if something is missing. If files were attached, mention them. End with: رد "نعم" للتنفيذ أو "لا" للإلغاء. Never claim to have done anything yet.`,
+    user: `<task>\n${text}\n</task>${files.length ? `\n<attachments>\n${files.map((f) => `${f.name} (${f.mime})`).join("\n")}\n</attachments>` : ""}`,
     maxTokens: 500,
     model: a.model,
   });
-  if (mode !== "dry") await d.state.set(pendingKey, JSON.stringify({ task, t: x.now }), { ex: 1800 });
+  if (mode !== "dry") await d.state.set(pendingKey, JSON.stringify({ task: text, files, t: x.now }), { ex: 1800 });
   return await answer(plan);
 }
 
