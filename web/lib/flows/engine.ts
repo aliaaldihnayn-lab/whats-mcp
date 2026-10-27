@@ -372,7 +372,8 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
 
 // ---------- actions ----------
 
-type ActionResult = { type: string; ok: boolean; detail?: string };
+/** `node` is set for graph flows, so the editor can mark which nodes ran. */
+type ActionResult = { type: string; ok: boolean; detail?: string; node?: string };
 
 async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"], actions: Action[] = flow.actions): Promise<{ results: ActionResult[]; status: LogEntry["status"]; stop: boolean }> {
   const results: ActionResult[] = [];
@@ -521,7 +522,7 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
       if (n.kind === "condition") {
         const r = await matches({ ...flow, match: n.match, conditions: n.conditions }, x, d);
         const why = r.results.map((c) => `${c.ok ? "✓" : "✗"} ${c.field} ${c.op}${c.value ? ` ${c.value}` : ""}${c.note ? ` (${c.note})` : ""}`).join("; ");
-        results.push({ type: "condition", ok: true, detail: `${r.ok ? "true" : "false"}: ${why}` });
+        results.push({ type: "condition", ok: true, node: n.id, detail: `${r.ok ? "true" : "false"}: ${why}` });
         await walk(successors(g, n.id, r.ok ? "true" : "false"));
       } else if (n.kind === "action") {
         if (!acted && gate) {
@@ -530,7 +531,7 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
         }
         acted = true;
         const r = await runActions(flow, x, d, mode, [n.action]);
-        results.push(...r.results);
+        results.push(...r.results.map((x) => ({ ...x, node: n.id })));
         if (r.status === "error") status = "error";
         else if (r.status === "draft" && status !== "error") status = "draft";
         if (r.stop) stop = true;
