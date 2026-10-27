@@ -13,6 +13,8 @@ const DEPLOY_URL =
     env: "MCP_SECRET,CRON_SECRET",
     envDescription: "Two long random strings you choose (24+ characters). Meta keys for the official mode can be added later.",
     envLink: `${REPO}/blob/main/web/README.md`,
+    // Creates the Upstash Redis database during the deploy, so there is no separate storage step.
+    stores: JSON.stringify([{ type: "integration", integrationSlug: "upstash", productSlug: "upstash-kv", protocol: "storage" }]),
   }).toString();
 
 const FEATURES: { title: string; text: string; items?: string[]; badge?: string }[] = [
@@ -118,7 +120,7 @@ export default function Home() {
                   </li>
                   <li>
                     <strong>أضف قاعدة البيانات</strong>
-                    <p>Storage ← Upstash Redis ← Connect، ثم أعد النشر.</p>
+                    <p>الزر ينشئها معك أثناء النشر. إذا ما ظهرت، من Storage ← Upstash Redis ← Connect ثم أعد النشر.</p>
                   </li>
                   <li>
                     <strong>اربط رقمك</strong>
