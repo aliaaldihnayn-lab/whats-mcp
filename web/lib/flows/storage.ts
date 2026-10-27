@@ -84,7 +84,7 @@ export async function readLog(state: RawKV): Promise<LogEntry[]> {
   return parseList<LogEntry>(await state.get(LOG));
 }
 
-export async function pushLog(state: RawKV, entries: LogEntry[], keep = 150) {
+export async function pushLog(state: RawKV, entries: LogEntry[], keep = 300) {
   if (!entries.length) return;
   const old = await readLog(state);
   await state.set(LOG, JSON.stringify([...entries.reverse(), ...old].slice(0, keep)), { ex: 30 * 86400 });
