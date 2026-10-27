@@ -10,7 +10,7 @@ import { AGENT_PROMPT, DEFAULT_REPLY_PROMPT, GUARD, KNOWLEDGE_RULES, SKIP, type 
 import type { Connector } from "../connectors";
 import type { Attachment, Loaded } from "../files";
 import { extractFile } from "../kb/extract";
-import { pushLog, readQueue, saveDraft, writeQueue } from "./storage";
+import { MAX_WAITS, deleteWait, listWaits, pushLog, readQueue, saveDraft, saveWait, writeQueue } from "./storage";
 import { successors } from "./graph";
 import type { Action, Cond, Flow, Graph, LogEntry, LogStep } from "./types";
 
@@ -487,6 +487,8 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
           detail = `webhook ${res.status}`;
           break;
         }
+        case "delay":
+          throw new Error("a delay only works in flows built in the node editor");
         case "stop":
           stop = true;
           detail = "stopped other flows for this message";
@@ -506,6 +508,7 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
 // ---------- graph flows ----------
 
 const MAX_STEPS = 60;
+const minutesLabel = (m: number) => (m % 1440 === 0 ? `${m / 1440} day(s)` : m % 60 === 0 ? `${m / 60} hour(s)` : `${m} min`);
 
 /**
  * Walks a node graph from the trigger. A condition node sends the message down its "true" or "false" wires;
@@ -513,7 +516,7 @@ const MAX_STEPS = 60;
  * fails, only the wires after it stop; other branches go on. `gate` is asked once, right before the first
  * action would run, so a flow whose conditions never lead to an action costs no rate-limit budget and is not logged.
  */
-async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow["mode"], gate?: () => Promise<string | null>) {
+async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow["mode"], gate?: () => Promise<string | null>, opts: { from?: string; runId?: string } = {}) {
   const results: ActionResult[] = [];
   let status: LogEntry["status"] = mode === "dry" ? "dry" : "ok";
   let stop = false;
@@ -532,6 +535,22 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
         const why = r.results.map((c) => `${c.ok ? "✓" : "✗"} ${c.field} ${c.op}${c.value ? ` ${c.value}` : ""}${c.note ? ` (${c.note})` : ""}`).join("; ");
         results.push({ type: "condition", ok: true, node: n.id, detail: `${r.ok ? "true" : "false"}: ${why}`, ms: Date.now() - t0, checks: r.results });
         await walk(successors(g, n.id, r.ok ? "true" : "false"));
+      } else if (n.kind === "action" && n.action.type === "delay") {
+        const t0 = Date.now();
+        const a = n.action;
+        acted = true; // a run that only waits still happened, and shows in the log
+        const span = minutesLabel(a.minutes);
+        if (mode === "dry") {
+          // dry runs and tests never wait: they show what comes after, as if the time had passed
+          results.push({ type: "delay", ok: true, node: n.id, ms: Date.now() - t0, detail: `would wait ${span}, then continue (shown now)` });
+          await walk(successors(g, n.id, "next"));
+        } else if ((await listWaits(d.state)).length >= MAX_WAITS) {
+          status = "error";
+          results.push({ type: "delay", ok: false, node: n.id, ms: Date.now() - t0, detail: `${MAX_WAITS} runs are already waiting; this one was dropped` });
+        } else {
+          await saveWait(d.state, { flow: flow.id, node: n.id, chat: x.chat, msg: x.msg?.id, createdAt: x.now, resumeAt: x.now + a.minutes * 60_000, cancelOnReply: a.cancelOnReply, runId: opts.runId, vars: { ai: x.vars.ai || undefined } });
+          results.push({ type: "delay", ok: true, node: n.id, ms: Date.now() - t0, detail: `continues after ${span}${a.cancelOnReply ? ", unless they reply first" : ""}` });
+        }
       } else if (n.kind === "action") {
         if (!acted && gate) {
           skipped = (await gate()) ?? undefined;
@@ -548,8 +567,8 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
     }
   };
 
-  const trigger = g.nodes.find((n) => n.kind === "trigger");
-  if (trigger) await walk(successors(g, trigger.id, "next"));
+  const start = opts.from ?? g.nodes.find((n) => n.kind === "trigger")?.id;
+  if (start) await walk(successors(g, start, "next"));
   return { results, status, stop, acted, skipped };
 }
 
@@ -564,8 +583,8 @@ function logBase(flow: Flow, x: Ctx, d: EngineDeps): LogEntry {
   };
 }
 
-async function guards(flow: Flow, x: Ctx, d: EngineDeps): Promise<string | null> {
-  if (flow.cooldownSeconds && x.chat && (await d.state.get(`flow:cd:${flow.id}:${x.chat}`))) return `cooldown (${flow.cooldownSeconds}s per chat)`;
+async function guards(flow: Flow, x: Ctx, d: EngineDeps, cooldown = true): Promise<string | null> {
+  if (cooldown && flow.cooldownSeconds && x.chat && (await d.state.get(`flow:cd:${flow.id}:${x.chat}`))) return `cooldown (${flow.cooldownSeconds}s per chat)`;
   if (flow.mode !== "dry" && !(await bump(d.state, `flow:cap:${flow.id}:${Math.floor(x.now / HOUR)}`, 7200, flow.maxPerHour))) return `hourly limit reached (${flow.maxPerHour})`;
   return null;
 }
@@ -574,7 +593,7 @@ async function fire(flow: Flow, x: Ctx, d: EngineDeps): Promise<{ entry: LogEntr
   const started = Date.now();
   const entry = logBase(flow, x, d);
   if (flow.graph) {
-    const r = await runGraph(flow, flow.graph, x, d, flow.mode, () => guards(flow, x, d));
+    const r = await runGraph(flow, flow.graph, x, d, flow.mode, () => guards(flow, x, d), { runId: entry.id });
     if (r.skipped) return { entry: { ...entry, status: "skipped", note: r.skipped, actions: r.results }, stop: false };
     if (!r.acted) return null; // the message took a branch that ends without an action
     if (flow.cooldownSeconds && x.chat && flow.mode !== "dry") await d.state.set(`flow:cd:${flow.id}:${x.chat}`, "1", { ex: flow.cooldownSeconds });
@@ -616,6 +635,49 @@ async function processMessage(m: StoredMessage, d: EngineDeps, now: number): Pro
       if (fired.stop) break;
     } catch (e) {
       logs.push({ ...logBase(flow, x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return logs;
+}
+
+// ---------- runs waiting at a delay ----------
+
+/** A wait that is this much overdue (the number was not synced, or the flow was off) is dropped, not sent stale. */
+const WAIT_GRACE_MS = 3 * 86400_000;
+
+async function resumeWaits(d: EngineDeps, now: number): Promise<LogEntry[]> {
+  const logs: LogEntry[] = [];
+  for (const w of await listWaits(d.state)) {
+    if (w.resumeAt > now) break; // sorted by due time
+    if (d.deadline && Date.now() > d.deadline) break;
+    await deleteWait(d.state, w.id); // first, so a crash can never continue the same run twice
+    const flow = d.flows.find((f) => f.id === w.flow);
+    const base = (name: string, note: string): LogEntry => ({ id: randomBytes(6).toString("hex"), resumed: w.runId, t: now, account: d.channel.account, flow: w.flow, name, chat: w.chat, status: "skipped", note, actions: [] });
+    if (!flow?.graph || !flow.graph.nodes.some((n) => n.id === w.node)) {
+      logs.push(base(flow?.name ?? w.flow, "the flow is off or was changed while this run waited, so it was dropped"));
+      continue;
+    }
+    if (now - w.resumeAt > WAIT_GRACE_MS) {
+      logs.push(base(flow.name, "too late to continue (overdue by more than 3 days), so it was dropped"));
+      continue;
+    }
+    if (w.cancelOnReply && w.chat && (await d.store.messages(w.chat, 20)).some((m) => m.direction === "in" && m.timestamp * 1000 > w.createdAt)) {
+      logs.push(base(flow.name, "cancelled: they wrote again while this run waited"));
+      continue;
+    }
+    const msg = w.msg ? (await d.store.getMessage(w.msg)) ?? undefined : undefined;
+    const x = makeCtx(flow, d, now, msg, await d.store.getName(w.chat), await getTags(d.state, w.chat));
+    x.chat = w.chat;
+    x.vars.ai = w.vars.ai ?? "";
+    const started = Date.now();
+    const entry = { ...logBase(flow, x, d), resumed: w.runId };
+    try {
+      // the hourly cap still applies; the per-chat cooldown does not, or a long cooldown would block its own run
+      const r = await runGraph(flow, flow.graph, x, d, flow.mode, () => guards(flow, x, d, false), { from: w.node, runId: entry.id });
+      if (r.skipped) logs.push({ ...entry, status: "skipped", note: r.skipped, actions: r.results });
+      else if (r.acted) logs.push({ ...entry, ms: Date.now() - started, status: r.status, actions: r.results });
+    } catch (e) {
+      logs.push({ ...entry, status: "error", note: e instanceof Error ? e.message : String(e) });
     }
   }
   return logs;
@@ -667,6 +729,7 @@ export async function runFlows(d: EngineDeps, fresh: StoredMessage[] = [], now =
     }
   }
   await writeQueue(d.state, remaining);
+  if (!d.deadline || Date.now() < d.deadline) logs.push(...(await resumeWaits(d, now)));
   if (!d.deadline || Date.now() < d.deadline) logs.push(...(await runSchedules(d, now)));
   await pushLog(d.state, logs);
   return logs;
