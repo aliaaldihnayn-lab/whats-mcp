@@ -11,8 +11,8 @@ import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, newAction, type ActionTy
 
 type Port = GraphEdge["port"];
 type Spec = GraphNode;
-type RunMark = { ok: boolean; detail?: string };
-type FNode = Node<{ spec: Spec; run?: RunMark }, Spec["kind"]>;
+export type RunMark = { ok: boolean; detail?: string };
+export type FNode = Node<{ spec: Spec; run?: RunMark }, Spec["kind"]>;
 
 export type BuilderData = {
   ai: { configured: boolean; cheap?: boolean; cheapModel?: string; defaultPrompt: string };
@@ -28,11 +28,11 @@ const MODE_NOTE: Record<EF["mode"], string> = {
   dry: "تجربة: يقيّم الشروط ويكتب في السجل إيش كان بيسوي، بدون ما يرسل أو يعلّم أي شي.",
 };
 
-const TITLE: Record<ActionType, string> = {
+export const TITLE: Record<ActionType, string> = {
   reply: "ردّ", ai_reply: "رد بالذكاء الاصطناعي", send: "إرسال لرقم", ai: "توليد نص بالذكاء الاصطناعي", agent: "مساعد بالأدوات",
   react: "تفاعل", mark_read: "تعليم كمقروءة", tag: "وسم", webhook: "Webhook", stop: "إيقاف الباقي",
 };
-const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", stop: "⛔" };
+export const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", stop: "⛔" };
 const GROUPS: { title: string; types: ActionType[] }[] = [
   { title: "رسائل", types: ["reply", "send", "react", "mark_read"] },
   { title: "ذكاء اصطناعي", types: ["ai_reply", "ai", "agent"] },
@@ -70,11 +70,12 @@ const specTitle = (s: Spec) => (s.kind === "trigger" ? "المحفز" : s.kind =
 
 // ---------- canvas nodes ----------
 
-const Ctx = createContext<{ trigger: Trigger; edges: Edge[]; onAdd: (id: string, port: Port) => void }>({ trigger: { type: "message", direction: "in", chats: "direct" }, edges: [], onAdd: () => {} });
+/** `readOnly` hides the "+" buttons: the run details page draws the same nodes without editing. */
+export const Ctx = createContext<{ trigger: Trigger; edges: Edge[]; onAdd: (id: string, port: Port) => void; readOnly?: boolean }>({ trigger: { type: "message", direction: "in", chats: "direct" }, edges: [], onAdd: () => {} });
 
 function Plus({ id, port, top }: { id: string; port: Port; top: string }) {
-  const { edges, onAdd } = useContext(Ctx);
-  if (edges.some((e) => e.source === id && (e.sourceHandle ?? "next") === port)) return null;
+  const { edges, onAdd, readOnly } = useContext(Ctx);
+  if (readOnly || edges.some((e) => e.source === id && (e.sourceHandle ?? "next") === port)) return null;
   return (
     <button type="button" className="fn-plus nodrag nopan" style={{ top }} aria-label="أضف الخطوة التالية" title="أضف الخطوة التالية" onClick={(e) => (e.stopPropagation(), onAdd(id, port))}>
       +
@@ -83,8 +84,9 @@ function Plus({ id, port, top }: { id: string; port: Port; top: string }) {
 }
 
 function Card({ kind, icon, title, sub, run, selected, children }: { kind: string; icon: string; title: string; sub?: string; run?: RunMark; selected?: boolean; children?: React.ReactNode }) {
+  const { readOnly } = useContext(Ctx);
   return (
-    <div className={`fnode ${kind}${selected ? " sel" : ""}${run ? (run.ok ? " ran" : " failed") : ""}`} dir="rtl">
+    <div className={`fnode ${kind}${selected ? " sel" : ""}${run ? (run.ok ? " ran" : " failed") : readOnly ? " idle" : ""}`} dir="rtl">
       <span className="fn-icon" aria-hidden="true">{icon}</span>
       <div className="fn-text">
         <strong>{title}</strong>
@@ -132,13 +134,13 @@ function ActionNode({ id, data, selected }: NodeProps<FNode>) {
   );
 }
 
-const nodeTypes = { trigger: TriggerNode, condition: ConditionNode, action: ActionNode };
+export const nodeTypes = { trigger: TriggerNode, condition: ConditionNode, action: ActionNode };
 
 // ---------- conversions ----------
 
-const toNode = (n: GraphNode): FNode => ({ id: n.id, type: n.kind, position: { x: n.x, y: n.y }, data: { spec: n }, deletable: n.kind !== "trigger" });
+export const toNode = (n: GraphNode): FNode => ({ id: n.id, type: n.kind, position: { x: n.x, y: n.y }, data: { spec: n }, deletable: n.kind !== "trigger" });
 const edgeId = (e: GraphEdge) => `${e.from}-${e.port}-${e.to}`;
-const toEdge = (e: GraphEdge): Edge => ({
+export const toEdge = (e: GraphEdge): Edge => ({
   id: edgeId(e), source: e.from, sourceHandle: e.port, target: e.to,
   markerEnd: { type: MarkerType.ArrowClosed },
   label: e.port === "true" ? "نعم" : e.port === "false" ? "لا" : undefined,
