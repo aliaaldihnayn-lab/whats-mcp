@@ -66,6 +66,8 @@ function actionSummary(a: Action) {
   }
 }
 
+const specTitle = (s: Spec) => (s.kind === "trigger" ? "المحفز" : s.kind === "condition" ? "شرط" : TITLE[s.action.type]);
+
 // ---------- canvas nodes ----------
 
 const Ctx = createContext<{ trigger: Trigger; edges: Edge[]; onAdd: (id: string, port: Port) => void }>({ trigger: { type: "message", direction: "in", chats: "direct" }, edges: [], onAdd: () => {} });
@@ -74,7 +76,7 @@ function Plus({ id, port, top }: { id: string; port: Port; top: string }) {
   const { edges, onAdd } = useContext(Ctx);
   if (edges.some((e) => e.source === id && (e.sourceHandle ?? "next") === port)) return null;
   return (
-    <button type="button" className="fn-plus nodrag nopan" style={{ top }} aria-label="أضف الخطوة التالية" title="أضف الخطوة التالية" onClick={() => onAdd(id, port)}>
+    <button type="button" className="fn-plus nodrag nopan" style={{ top }} aria-label="أضف الخطوة التالية" title="أضف الخطوة التالية" onClick={(e) => (e.stopPropagation(), onAdd(id, port))}>
       +
     </button>
   );
@@ -214,7 +216,18 @@ export function FlowBuilder(props: Props) {
 
   const save = () => {
     const g = Graph.safeParse(serialize(nodes, edges));
-    if (!g.success) return setLocalError(g.error.issues[0].message);
+    if (!g.success) {
+      // point at the node with the problem instead of a raw schema message
+      const issue = g.error.issues[0];
+      const bad = issue.path[0] === "nodes" ? nodes[Number(issue.path[1])] : undefined;
+      if (bad) {
+        setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === bad.id })));
+        setAdding(null);
+        const what = issue.code === "too_small" ? "حقل مطلوب فاضي" : issue.code === "invalid_format" ? "قيمة غير صالحة (مثل رابط ناقص)" : issue.message;
+        return setLocalError(`عقدة "${specTitle(bad.data.spec)}": ${what}`);
+      }
+      return setLocalError(issue.message.startsWith("a flow needs") ? (issue.message.includes("trigger") ? "الفلو يحتاج محفز واحد بالضبط" : "الفلو يحتاج إجراء واحد على الأقل") : issue.message);
+    }
     setLocalError("");
     onSave(build());
   };
@@ -247,7 +260,7 @@ export function FlowBuilder(props: Props) {
               onNodeClick={() => setAdding(null)}
               onPaneClick={() => setAdding(null)}
               fitView
-              fitViewOptions={{ padding: 0.35, maxZoom: 1 }}
+              fitViewOptions={{ padding: 0.12, minZoom: 0.6, maxZoom: 1 }}
               minZoom={0.3}
               maxZoom={1.6}
               colorMode="system"
