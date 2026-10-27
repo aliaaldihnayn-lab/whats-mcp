@@ -295,3 +295,102 @@ h1, h2, h3 { font-family: var(--display); }
 .envs { grid-template-columns: max-content minmax(0, 1fr); }
 @media (max-width: 760px) { .envs { grid-template-columns: 1fr; } .compare { min-width: 640px; } }
 .code pre { padding-right: 64px; }
+
+/* =====================================================================
+   Dashboard shell + design system (/personal/*)
+   Scoped under .app so the landing page is untouched.
+   ===================================================================== */
+.app {
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --ctl: 44px;
+  --shadow: 0 1px 2px #00000014, 0 8px 24px -12px #00000030;
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --ok: #1f9d6b;
+  --bad: #b3261e;
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  min-height: 100dvh;
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .app { --bad: #f2b8b5; --ok: #4fd6a0; } }
+
+.app-side { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; gap: 22px; padding: 22px 14px; background: var(--paper-2); border-inline-end: 1px solid var(--line); }
+.app-side .mark { font-size: 20px; padding: 0 10px; }
+.app-nav { display: grid; gap: 4px; }
+.app-nav a { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: var(--r-md); color: var(--muted); text-decoration: none; font-weight: 500; transition: background .15s, color .15s; }
+.app-nav a svg { width: 21px; height: 21px; flex: none; }
+.app-nav a:hover { background: var(--accent-soft); color: var(--ink); }
+.app-nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+.app-foot { margin-top: auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 14px; border-radius: var(--r-md); background: var(--paper); box-shadow: inset 0 0 0 1px var(--line); font-size: 13.5px; color: var(--muted); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+.dot.off { background: var(--bad); }
+.app-main { min-width: 0; padding: 24px clamp(16px, 3vw, 40px) 48px; }
+
+/* pages still carry their own header and tab strip until they are migrated */
+.app-main > .wrap, .app-main .wrap.wide { max-width: none; padding: 0; }
+.app-main .top, .app-main .tabs { display: none; }
+.app-main section { border-top: 0; padding: 0; }
+.app-main h2 { font-size: clamp(26px, 3vw, 34px); margin-bottom: 8px; }
+.app-main h3 { font-size: 20px; font-weight: 600; margin: 28px 0 10px; }
+.app-main .intro { font-size: 16px; margin-bottom: 24px; }
+
+/* controls: one size everywhere, large enough to read and tap */
+.app input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), .app select, .app textarea {
+  font: 400 16px var(--body); min-height: var(--ctl); padding: 10px 14px; border-radius: var(--r-md);
+  border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); max-width: 100%; transition: border-color .15s, box-shadow .15s;
+}
+.app input::placeholder, .app textarea::placeholder { color: var(--muted); opacity: .75; }
+.app input:focus, .app select:focus, .app textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.app input[type="checkbox"], .app input[type="radio"] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.app input[type="file"] { font: 400 15px var(--body); }
+.app input[type="file"]::file-selector-button { font: 500 14px var(--body); min-height: 38px; padding: 0 16px; margin-inline-end: 12px; border-radius: 999px; border: 1.5px solid var(--accent); background: none; color: var(--accent); cursor: pointer; }
+.app textarea { min-height: 96px; }
+.app .btn { min-height: var(--ctl); justify-content: center; font-size: 15.5px; transition: filter .15s, transform .05s; }
+.app .btn:active:not(:disabled) { transform: translateY(1px); }
+.app .btn.small { min-height: 36px; padding: 4px 16px; font-size: 14px; }
+.app .btn.danger { color: var(--bad); border-color: var(--bad); }
+.app .row input:not([type="checkbox"]) { flex: 1 1 220px; font-family: var(--body); }
+.app .card, .app .editor { border-radius: var(--r-lg); background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--line); }
+.app .card { padding: 20px 22px; }
+.app .chip { font-size: 14px; padding: 5px 14px; }
+.app .note { max-width: none; }
+.app .toast { box-shadow: var(--shadow); inset-inline-start: 24px; }
+.app .empty { font-size: 15px; }
+
+/* skeleton shown while the first response is in flight */
+.skel { border-radius: var(--r-md); background: linear-gradient(90deg, var(--paper-2) 25%, var(--line) 50%, var(--paper-2) 75%); background-size: 200% 100%; animation: skel 1.2s linear infinite; min-height: 18px; }
+@keyframes skel { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+/* inbox: WhatsApp-Web style two panes filling the viewport */
+.app-main .inbox { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); height: calc(100dvh - 48px); min-height: 480px; border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.app .chatlist button { padding: 13px 16px; transition: background .12s; }
+.app .chatlist .nm { font-size: 16px; }
+.app .chatlist .pv { font-size: 14px; }
+.app .msgs { background: color-mix(in srgb, var(--paper-2) 60%, var(--paper)); padding: 20px clamp(12px, 3vw, 32px); }
+.app .m { box-shadow: 0 1px 1px #0000001a; font-size: 15.5px; }
+.app .composer { background: var(--paper-2); }
+.app .composer textarea { min-height: 52px; max-height: 160px; resize: none; }
+.app .thread header { min-height: 64px; background: var(--paper-2); }
+
+/* flows + knowledge */
+.app .flows { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); }
+.app .flowitem { padding: 14px 16px; transition: box-shadow .15s; }
+.app .flowitem:hover { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.app .editor { padding: 24px 26px; }
+
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .app-side { position: fixed; inset: auto 0 0 0; z-index: 30; height: auto; flex-direction: row; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-inline-end: 0; border-top: 1px solid var(--line); }
+  .app-side .mark, .app-foot { display: none; }
+  .app-nav { grid-auto-flow: column; grid-auto-columns: 1fr; width: 100%; }
+  .app-nav a { flex-direction: column; gap: 2px; padding: 7px 4px; font-size: 12px; text-align: center; }
+  .app-main { padding: 16px 14px 92px; }
+  .app-main .inbox { height: calc(100dvh - 124px); }
+  .app .flows { grid-template-columns: 1fr; }
+  .app .toast { inset-block-end: 88px; }
+}
