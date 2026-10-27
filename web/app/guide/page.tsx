@@ -55,9 +55,10 @@ export default function Guide() {
           <Secrets />
           <ol className="steps">
             <li><strong>أنشئ حساب Vercel</strong><p>من vercel.com بخطة Hobby المجانية، وسجّل بحساب GitHub.</p></li>
-            <li><strong>اضغط «انشر نسختك» من الصفحة الرئيسية</strong><p>يستنسخ المشروع لحسابك على GitHub وينشره. الزر ينشئ قاعدة Upstash Redis معه.</p></li>
+            <li><strong>اضغط «انشر نسختك» من الصفحة الرئيسية</strong><p>يستنسخ المشروع لحسابك على GitHub وينشره. المستودع الأصلي لازم يكون Public.</p></li>
             <li><strong>اختر MCP_SECRET و CRON_SECRET</strong><p>نصين عشوائيين طويلين (24 حرف أو أكثر) مختلفين. احفظهم في مدير كلمات المرور. MCP_SECRET هو اللي تدخل فيه للوحة التحكم، فلا تشاركه.</p></li>
-            <li><strong>تأكد من قاعدة البيانات</strong><p>في مشروعك: Storage، وتأكد إن Upstash Redis مربوطة. إن لا، أضفها (Create ← Upstash ← Redis ← Connect) ثم Redeploy.</p></li>
+            <li><strong>أضف قاعدة البيانات (Upstash Redis)</strong><p>أسهل طريقة: مشروعك ← Storage ← Create ← Upstash ← Redis ← اختر الخطة المجانية (Free) ← Connect، ثم Redeploy. إذا ما ظهرت الخطة المجانية (حساب Upstash عندك فيه قاعدة مجانية أصلاً، والمسموح قاعدة وحدة)، استخدم الطريقة البديلة تحت.</p></li>
+            <li><strong>بديل: قاعدة من موقع Upstash مباشرة</strong><p>من console.upstash.com (بحساب جديد لو القديم ممتلئ) أنشئ Redis مجانية، وانسخ <code>REST URL</code> و<code>REST Token</code> وضعهم في فيرسل كمتغيرين: <code>KV_REST_API_URL</code> و<code>KV_REST_API_TOKEN</code>، ثم Redeploy. لا تشارك قاعدة بين عميلين.</p></li>
             <li><strong>عطّل حماية النشر</strong><p>Settings ← Deployment Protection ← أوقف Vercel Authentication للإنتاج. بدونها يظهر Claude خطأ تسجيل دخول لأنه ما يقدر يوصل للرابط.</p></li>
           </ol>
         </section>
