@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 const KEY = "whats-mcp-secret";
 
@@ -35,8 +35,18 @@ export type Status = {
   flowsPaused: boolean;
 };
 
+type Session = { secret: string; status: Status; reload: () => Promise<void> };
+const SessionCtx = createContext<Session | null>(null);
+
+/** The secret and server status, loaded once by the /personal layout and shared with every page. */
+export function useSession(): Session {
+  const s = useContext(SessionCtx);
+  if (!s) throw new Error("useSession must be used under SecretGate");
+  return s;
+}
+
 /** Asks for MCP_SECRET once per tab, checks it against the server, then renders the page. */
-export function SecretGate({ children }: { children: (secret: string, status: Status, reload: () => Promise<void>) => ReactNode }) {
+export function SecretGate({ children }: { children: ReactNode | ((secret: string, status: Status, reload: () => Promise<void>) => ReactNode) }) {
   const [secret, setSecret] = useState("");
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<Status | null>(null);
@@ -70,7 +80,10 @@ export function SecretGate({ children }: { children: (secret: string, status: St
     }
   }, [load]);
 
-  if (status && secret) return <>{children(secret, status, () => load(secret))}</>;
+  if (status && secret) {
+    const reload = () => load(secret);
+    return <SessionCtx.Provider value={{ secret, status, reload }}>{typeof children === "function" ? children(secret, status, reload) : children}</SessionCtx.Provider>;
+  }
   return (
     <form
       className="field panel"
@@ -89,6 +102,89 @@ export function SecretGate({ children }: { children: (secret: string, status: St
       {error && <p className="err">{error}</p>}
     </form>
   );
+}
+
+// Stale-while-revalidate cache shared by every page: switching tabs shows the last answer instantly
+// and refreshes it in the background. Identical in-flight requests are merged into one.
+const cache = new Map<string, { data: unknown; at: number }>();
+const inflight = new Map<string, Promise<unknown>>();
+
+export function invalidate(prefix: string) {
+  for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
+}
+
+function fetchShared<T>(secret: string, path: string): Promise<T> {
+  const hit = inflight.get(path);
+  if (hit) return hit as Promise<T>;
+  const p = call<T>(secret, path)
+    .then((d) => {
+      cache.set(path, { data: d, at: Date.now() });
+      return d;
+    })
+    .finally(() => inflight.delete(path));
+  inflight.set(path, p);
+  return p;
+}
+
+/**
+ * GET `path` with the shared cache. `fresh` is how long (ms) a cached answer is used without refetching;
+ * `poll` refetches on an interval while the tab is visible. Pass null to stay idle.
+ */
+export function useApi<T = any>(path: string | null, opts: { fresh?: number; poll?: number } = {}) {
+  const { secret } = useSession();
+  const { fresh = 15_000, poll } = opts;
+  const [data, setData] = useState<T | undefined>(() => (path ? (cache.get(path)?.data as T | undefined) : undefined));
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => () => void (alive.current = false), []);
+
+  const run = useCallback(
+    async (force: boolean) => {
+      if (!path) return;
+      const c = cache.get(path);
+      if (c && !force && Date.now() - c.at < fresh) {
+        setData(c.data as T);
+        return;
+      }
+      if (c) setData(c.data as T);
+      setLoading(true);
+      try {
+        const d = await fetchShared<T>(secret, path);
+        if (alive.current) (setData(d), setError(""));
+      } catch (e) {
+        if (alive.current) setError(errMsg(e));
+      } finally {
+        if (alive.current) setLoading(false);
+      }
+    },
+    [secret, path, fresh],
+  );
+
+  useEffect(() => {
+    if (!path) return setData(undefined);
+    setData(cache.get(path)?.data as T | undefined);
+    void run(false);
+  }, [path, run]);
+
+  useEffect(() => {
+    if (!poll || !path) return;
+    const t = setInterval(() => document.visibilityState === "visible" && void run(true), poll);
+    return () => clearInterval(t);
+  }, [poll, path, run]);
+
+  const set = useCallback(
+    (next: T | ((prev: T | undefined) => T)) => {
+      setData((prev) => {
+        const v = typeof next === "function" ? (next as (p: T | undefined) => T)(prev) : next;
+        if (path) cache.set(path, { data: v, at: Date.now() });
+        return v;
+      });
+    },
+    [path],
+  );
+
+  return { data, error, loading, reload: () => run(true), set };
 }
 
 export function Nav({ current }: { current: "link" | "inbox" | "flows" | "knowledge" }) {
