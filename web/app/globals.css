@@ -555,3 +555,14 @@ h1, h2, h3 { font-family: var(--display); }
 .log-filters select { min-width: 150px; }
 .log-filters input { flex: 1 1 220px; }
 @media (max-width: 960px) { .app .run-grid { grid-template-columns: 1fr; } }
+
+/* replay */
+.app .replay-bar { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; }
+.app .replay-bar .grow { flex: 1 1 320px; min-width: 0; }
+.app .replay-bar .hint { margin: 4px 0 0; }
+.app .seg { display: inline-flex; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--line); overflow: hidden; }
+.app .seg button { all: unset; cursor: pointer; padding: 5px 16px; font-size: 14px; font-weight: 500; color: var(--muted); }
+.app .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.app .seg button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.compare-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.compare-list li { padding: 10px 14px; border-radius: var(--r-md); background: var(--paper); box-shadow: inset 0 0 0 1px var(--line); }
