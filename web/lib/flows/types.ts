@@ -93,6 +93,8 @@ export const Trigger = z.discriminatedUnion("type", [
     everyMinutes: z.number().int().min(5).max(10080).default(1440),
     atHour: z.number().int().min(0).max(23).optional(),
   }),
+  /** an outside system calls /api/hooks/<flow id> with a signed request; the secret lives outside the flow */
+  z.object({ type: z.literal("webhook") }),
 ]);
 export type Trigger = z.infer<typeof Trigger>;
 

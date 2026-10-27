@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryKV, Store, type StoredMessage } from "./store";
 import { MemoryRawKV } from "./wa/auth";
-import { runFlows, testFlow, norm, render, type Channel, type EngineDeps } from "./flows/engine";
+import { runFlows, runWebhookFlow, testFlow, norm, render, type Channel, type EngineDeps } from "./flows/engine";
 import { FlowInput, Graph, type Flow, type FlowDraft } from "./flows/types";
 import { flowToGraph, unreachable } from "./flows/graph";
 import { listDrafts, readLog, saveFlow, listFlows, flowsFor, setPaused, isPaused, listWaits, saveWait, MAX_WAITS } from "./flows/storage";
@@ -703,4 +703,39 @@ test("delay: waiting runs are capped per number, and loops or linear delays cann
   const b = { id: "a2", kind: "action" as const, x: 0, y: 0, action: { type: "mark_read" as const } };
   assert.equal(Graph.safeParse({ nodes: [t, a, b], edges: [{ from: "t", port: "next", to: "a1" }, { from: "a1", port: "next", to: "a2" }, { from: "a2", port: "next", to: "a1" }] }).success, false, "a loop");
   assert.throws(() => FlowInput.parse({ name: "x", actions: [{ type: "delay", minutes: 5 }] }), /node editor/);
+});
+
+// ---------- webhook trigger ----------
+
+const hookFlow = (over: Partial<FlowDraft> = {}) => mkFlow({ trigger: { type: "webhook" }, actions: [{ type: "reply", text: "طلبك {{hook_order}} جاهز يا {{chat_name}}", quote: false }], ...over });
+
+test("webhook: runs the flow on the chat it names, with {{hook_*}} fields, and logs the run", async () => {
+  const { deps, sent, store, state } = setup([]);
+  await store.saveMessage(msg()); // the customer wrote before, so the chat exists
+  await store.setName(CHAT, "سارة");
+  const entry = await runWebhookFlow(hookFlow(), { to: "966500000001", text: "طلب جديد", data: { order: "A-17" } }, deps, NOW);
+  assert.deepEqual(sent.map((m) => [m.chat, m.text]), [[CHAT, "طلبك A-17 جاهز يا سارة"]]);
+  assert.equal(entry?.status, "ok");
+  assert.equal(entry?.trigger?.type, "webhook");
+  assert.equal((await readLog(state))[0].id, entry?.id);
+});
+
+test("webhook: never messages a chat this number has no history with", async () => {
+  const { deps, sent } = setup([]);
+  const entry = await runWebhookFlow(hookFlow({ actions: [{ type: "send", to: "966511112222", text: "عرض" }] }), { data: {} }, deps, NOW);
+  assert.equal(sent.length, 0);
+  assert.equal(entry?.status, "error");
+  assert.match(entry?.actions[0].detail ?? "", /only message chats that already exist/);
+});
+
+test("webhook: approve mode makes drafts, conditions can route on hook fields, paused flows refuse", async () => {
+  const { deps, sent, store, state } = setup([]);
+  await store.saveMessage(msg());
+  const draftEntry = await runWebhookFlow(hookFlow({ mode: "approve" }), { to: "966500000001", data: { order: "1" } }, deps, NOW);
+  assert.equal(draftEntry?.status, "draft");
+  assert.equal((await listDrafts(state, "pending")).length, 1);
+  assert.equal(sent.length, 0);
+  const gated = hookFlow({ conditions: [{ field: "text", op: "contains", value: "عاجل" }] });
+  assert.equal(await runWebhookFlow(gated, { to: "966500000001", text: "عادي", data: {} }, deps, NOW), null, "no action, no log");
+  await assert.rejects(() => runWebhookFlow(hookFlow(), { data: {} }, { ...deps, paused: true }, NOW), /paused/);
 });
