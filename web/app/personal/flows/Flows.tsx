@@ -108,7 +108,8 @@ function App({ secret }: { secret: string }) {
   return (
     <>
       <div className="chips">
-        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ ${PROVIDER_NAME} جاهز (${[data.ai.claude && data.ai.model, data.ai.cheap && (data.ai.cheapModel ?? "OpenAI-compatible")].filter(Boolean).join(" + ")}، حد يومي ${data.ai.dailyCap})` : `○ ${PROVIDER_NAME} غير مفعّل: أضف مفتاح Anthropic أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL)`}</span>
+        {!data.ai.configured && <a className="chip opt" href="/guide#s3">خطوات التفعيل</a>}
+        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ ${[data.ai.claude && `Anthropic (${data.ai.model})`, data.ai.cheap && `متوافق مع OpenAI (${data.ai.cheapModel ?? "?"})`].filter(Boolean).join(" + ")} جاهز، حد يومي ${data.ai.dailyCap}` : `○ ${PROVIDER_NAME} غير مفعّل: أضف مفتاح Anthropic أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL) في فيرسل`}</span>
         <span className={`chip ${data.paused ? "off" : "on"}`}>{data.paused ? "✗ كل الفلوات موقوفة" : "✓ الفلوات تشتغل"}</span>
         <button type="button" className="btn ghost small" onClick={() => pause(!data.paused)}>{data.paused ? "شغّل الكل" : "أوقف الكل فوراً"}</button>
       </div>

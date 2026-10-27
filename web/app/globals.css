@@ -428,6 +428,9 @@ h1, h2, h3 { font-family: var(--display); }
 .app .card .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
 @media (max-width: 960px) { .app .kb-grid { grid-template-columns: 1fr; } }
 
+/* from main: landing header button */
+header.top nav .btn { padding: 6px 16px; color: var(--accent-ink); }
+
 /* ---------- flow builder (node editor) ---------- */
 .app .flows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
 .app .section-head { display: flex; justify-content: space-between; align-items: center; margin: 0 0 12px; }
