@@ -278,7 +278,7 @@ const NO = /^\s*(لا|لأ|الغ|ألغ|الغاء|إلغاء|كنسل|no|n|can
 const BOT = "🤖 ";
 
 async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: EngineDeps, mode: Flow["mode"]): Promise<string> {
-  if (!d.agent || !d.ai) throw new Error("Set ANTHROPIC_API_KEY in Vercel to use the Claude assistant.");
+  if (!d.agent || !d.ai) throw new Error("Set an AI key in Vercel (ANTHROPIC_API_KEY, or AI_COMPAT_* for a cheaper model) to use the assistant.");
   const all = d.connectors ? await d.connectors() : [];
   const servers = all.filter((c) => !a.connectors.length || a.connectors.includes(c.name));
   const sys = `${a.prompt.trim() ? a.prompt.trim() + "\n\n" : ""}${AGENT_PROMPT}`;
@@ -294,7 +294,7 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
   // Scheduled flow: the prompt is the task. Result goes to {{ai}} for a following send action.
   if (!x.msg) {
     if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
-    const out = await d.agent({ system: sys, user: a.prompt || "Do the scheduled task.", maxTokens: a.maxTokens, model: a.model, servers });
+    const out = await d.agent({ system: sys, user: a.prompt || "Do the scheduled task.", maxTokens: a.maxTokens, model: a.model, provider: a.provider, servers });
     x.vars.ai = out;
     return `Claude (${servers.length} connectors): ${out.slice(0, 160)}`;
   }
@@ -335,7 +335,7 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
       }
       loaded.push({ name: l.name, mime: l.mime, bytes: l.bytes, url: d.fileStore!.url(l), text: t });
     }
-    const out = await d.agent!({ system: sys, user: `<task>\n${task || "(see the attachments)"}\n</task>`, maxTokens: a.maxTokens, model: a.model, servers, files: loaded });
+    const out = await d.agent!({ system: sys, user: `<task>\n${task || "(see the attachments)"}\n</task>`, maxTokens: a.maxTokens, model: a.model, provider: a.provider, servers, files: loaded });
     x.vars.ai = out;
     return await answer(out);
   };

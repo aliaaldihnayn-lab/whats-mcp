@@ -8,6 +8,7 @@ import { markRead, meDigits, sendReaction, sendText } from "../wa/ops";
 import { toJid, withWhatsApp } from "../wa/session";
 import { agentFromEnv, aiFromEnv } from "./ai";
 import { listConnectors } from "../connectors";
+import { connectMcp } from "../mcpclient";
 import { fileUrl, loadFile, publicBase, saveFile } from "../files";
 import { knowledgeContext } from "../kb/store";
 import { runFlows, type Channel, type EngineDeps } from "./engine";
@@ -47,7 +48,7 @@ export async function syncAccount(base: RawKV, a: AccountDeps, opts: { maxMs?: n
     ...(active
       ? {
           afterDrain: async ({ sock, fresh, files, deadline }) => {
-            const deps: EngineDeps = { flows, state: a.raw, store: a.store, channel: personalChannel(sock, a), ai, agent: agentFromEnv(), connectors: () => listConnectors(base), downloads: files, fileStore: { save: (b, m, n) => saveFile(base, b, m, n), load: (id) => loadFile(base, id), url: (f) => fileUrl(publicBase(), f) }, deadline, knowledge: (q) => knowledgeContext(base, q), ...engineLimits() };
+            const deps: EngineDeps = { flows, state: a.raw, store: a.store, channel: personalChannel(sock, a), ai, agent: agentFromEnv(process.env, connectMcp), connectors: () => listConnectors(base), downloads: files, fileStore: { save: (b, m, n) => saveFile(base, b, m, n), load: (id) => loadFile(base, id), url: (f) => fileUrl(publicBase(), f) }, deadline, knowledge: (q) => knowledgeContext(base, q), ...engineLimits() };
             await runFlows(deps, fresh);
           },
         }
@@ -76,5 +77,5 @@ export async function runOfficialFlows(
     markRead: async (_chat, msg) => void (await io.graph.markRead(msg.id)),
     resolveTarget: io.normalize,
   };
-  return runFlows({ flows, state: io.state, store: io.store, channel, ai: aiFromEnv(), agent: agentFromEnv(), connectors: () => listConnectors(io.base), deadline: Date.now() + 45_000, knowledge: (q) => knowledgeContext(io.base, q), ...engineLimits() }, fresh);
+  return runFlows({ flows, state: io.state, store: io.store, channel, ai: aiFromEnv(), agent: agentFromEnv(process.env, connectMcp), connectors: () => listConnectors(io.base), deadline: Date.now() + 45_000, knowledge: (q) => knowledgeContext(io.base, q), ...engineLimits() }, fresh);
 }

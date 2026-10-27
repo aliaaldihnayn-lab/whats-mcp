@@ -313,3 +313,37 @@ test("cheap OpenAI-compatible provider: routed per action, model names never lea
   assert.equal(hits[2].body.model, "deepseek-chat");
   assert.equal(aiFromEnv({}, f), undefined);
 });
+
+test("any model can drive connectors: own MCP client + tool loop over an OpenAI-compatible API", async () => {
+  const { agentFromEnv } = await import("./flows/ai");
+  const { connectMcp } = await import("./mcpclient");
+  const calls: any[] = [];
+  const mcpFetch = (async (_u: any, init: any) => {
+    const b = JSON.parse(init.body);
+    if (b.method === "notifications/initialized") return new Response("", { status: 202 });
+    const result =
+      b.method === "initialize" ? { protocolVersion: "2025-06-18", capabilities: {} }
+      : b.method === "tools/list" ? { tools: [{ name: "create_product", description: "x", inputSchema: { type: "object", properties: { title: { type: "string" } } } }] }
+      : (calls.push(b.params), { content: [{ type: "text", text: "created #7" }] });
+    // answer as server-sent events, like many real servers do
+    return new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: b.id, result })}\n\n`, { status: 200, headers: { "content-type": "text/event-stream", "mcp-session-id": "s1" } });
+  }) as typeof fetch;
+  const connect = (s: any) => connectMcp(s, { fetchImpl: mcpFetch, check: async (u) => u });
+  let turn = 0;
+  const seen: any[] = [];
+  const modelFetch = (async (_u: any, init: any) => {
+    const b = JSON.parse(init.body);
+    seen.push(b);
+    const msg = turn++ === 0
+      ? { content: "", tool_calls: [{ id: "c1", function: { name: "shop__create_product", arguments: '{"title":"قميص"}' } }] }
+      : { content: "تم إنشاء المنتج 7" };
+    return new Response(JSON.stringify({ choices: [{ message: msg }] }), { status: 200 });
+  }) as typeof fetch;
+  const agent = agentFromEnv({ AI_COMPAT_URL: "https://x.example/v1", AI_COMPAT_KEY: "k", AI_COMPAT_MODEL: "m" }, connect, modelFetch)!;
+  const out = await agent({ system: "s", user: "أضف قميص", maxTokens: 500, servers: [{ name: "shop", url: "https://mcp.example.com/mcp" }], files: [{ name: "a.jpg", mime: "image/jpeg", bytes: Buffer.from("x"), url: "https://app/f" }] });
+  assert.equal(out, "تم إنشاء المنتج 7");
+  assert.deepEqual(calls[0], { name: "create_product", arguments: { title: "قميص" } });
+  assert.equal(seen[0].tools[0].function.name, "shop__create_product");
+  assert.match(JSON.stringify(seen[0].messages[1].content), /https:\/\/app\/f/); // no vision: link only
+  assert.equal(seen[1].messages.at(-1).content, "created #7");
+});

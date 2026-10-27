@@ -377,6 +377,13 @@ function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: { a: Act
       return (
         <div>
           <textarea aria-label="تعليمات المهمة" value={a.prompt} onChange={(e) => onChange({ ...a, prompt: e.target.value })} placeholder="في فلو مجدول: اكتب المهمة هنا. في فلو الرسائل: تعليمات إضافية (اختياري)." />
+          {cheapModel && (
+            <label>المزود
+              <select value={a.provider ?? ""} onChange={(e) => onChange({ ...a, provider: (e.target.value || undefined) as "claude" | "cheap" | undefined })}>
+                <option value="">الافتراضي</option><option value="claude">Claude</option><option value="cheap">الرخيص ({cheapModel})</option>
+              </select>
+            </label>
+          )}
           <label className="sw small"><input type="checkbox" checked={a.confirm} onChange={(e) => onChange({ ...a, confirm: e.target.checked })} /> اطلب تأكيدي (\"نعم\") قبل التنفيذ</label>
           <p className="hint">يستخدم الموصلات من صفحة قاعدة المعرفة. فقط رسائلك أنت (من رقمك) تُنفَّذ كمهام، ورد Claude يبدأ بـ 🤖 عشان ما يعيد نفسه.</p>
         </div>

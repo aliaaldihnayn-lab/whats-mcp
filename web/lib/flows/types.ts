@@ -52,6 +52,7 @@ export const Action = z.discriminatedUnion("type", [
     /** connector names to allow; empty = all */
     connectors: z.array(z.string().max(30)).max(10).default([]),
     model: z.string().max(80).optional(),
+    provider: z.enum(["claude", "cheap"]).optional(),
     maxTokens: z.number().int().min(256).max(8000).default(2000),
   }),
   z.object({

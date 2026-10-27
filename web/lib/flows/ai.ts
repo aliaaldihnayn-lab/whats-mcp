@@ -101,8 +101,79 @@ export function anthropicAgent(apiKey: string, defaultModel = DEFAULT_MODEL, fet
   };
 }
 
-export function agentFromEnv(env: Record<string, string | undefined> = process.env): AgentClient | undefined {
-  return env.ANTHROPIC_API_KEY ? anthropicAgent(env.ANTHROPIC_API_KEY, env.AI_MODEL || DEFAULT_MODEL) : undefined;
+/**
+ * The same job for any OpenAI-compatible model with function calling: we talk to the
+ * connectors ourselves (MCP over HTTP) and loop model -> tool -> model.
+ */
+export type ConnectFn = (s: { name: string; url: string; token?: string }) => { tools(): Promise<{ name: string; description?: string; inputSchema?: Record<string, unknown> }[]>; call(name: string, args: Record<string, unknown>): Promise<string> };
+
+export function compatAgent(baseUrl: string, apiKey: string, defaultModel: string, connect: ConnectFn, opts: { fetchImpl?: typeof fetch; vision?: boolean; maxSteps?: number } = {}): AgentClient {
+  const f = opts.fetchImpl ?? fetch;
+  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  return async ({ system, user, maxTokens, model, servers, files = [] }) => {
+    const conns = servers.map((s) => ({ s, c: connect(s) }));
+    const routes = new Map<string, { c: (typeof conns)[number]["c"]; tool: string }>();
+    const tools: any[] = [];
+    for (const { s, c } of conns) {
+      for (const t of await c.tools()) {
+        const name = `${s.name}__${t.name}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+        if (routes.has(name)) continue;
+        routes.set(name, { c, tool: t.name });
+        tools.push({ type: "function", function: { name, description: (t.description ?? "").slice(0, 1000), parameters: t.inputSchema ?? { type: "object", properties: {} } } });
+      }
+    }
+    const content: any[] = [];
+    for (const x of files) {
+      const m = x.mime.split(";")[0].toLowerCase();
+      const label = `Attachment "${x.name}" (${m}, ${x.bytes.length} bytes)${x.url ? `, link for tools: ${x.url}` : ""}`;
+      if (x.text) content.push({ type: "text", text: `${label}\n<file>\n${x.text.slice(0, 40_000)}\n</file>` });
+      else if (opts.vision && /^image\/(jpeg|png|gif|webp)$/.test(m)) content.push({ type: "text", text: label }, { type: "image_url", image_url: { url: `data:${m};base64,${x.bytes.toString("base64")}` } });
+      else content.push({ type: "text", text: `${label}. You cannot see its content; pass the link to a tool if one takes files or images.` });
+    }
+    content.push({ type: "text", text: user });
+    const messages: any[] = [{ role: "system", content: system }, { role: "user", content }];
+    const steps = opts.maxSteps ?? 12;
+    for (let i = 0; i < steps; i++) {
+      const res = await f(url, {
+        method: "POST",
+        signal: AbortSignal.timeout(90_000),
+        headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: model || defaultModel, max_tokens: maxTokens, messages, ...(tools.length ? { tools, tool_choice: "auto" } : {}) }),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(`AI provider ${res.status}: ${data?.error?.message ?? res.statusText}`);
+      const msg = data?.choices?.[0]?.message;
+      if (!msg) throw new Error("The AI provider returned no message");
+      const calls = msg.tool_calls ?? [];
+      if (!calls.length) return String(msg.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim() || "(done, no text answer)";
+      messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: calls });
+      for (const call of calls) {
+        let out: string;
+        try {
+          const r = routes.get(call.function?.name);
+          if (!r) throw new Error("unknown tool");
+          out = await r.c.call(r.tool, JSON.parse(call.function.arguments || "{}"));
+        } catch (e) {
+          out = `ERROR: ${e instanceof Error ? e.message : e}`;
+        }
+        messages.push({ role: "tool", tool_call_id: call.id, content: out.slice(0, 8000) });
+      }
+    }
+    return "Stopped: too many steps without finishing. Tell me what to continue.";
+  };
+}
+
+/** Claude (native connectors) and/or the cheap provider (our own tool loop); each action picks. */
+export function agentFromEnv(env: Record<string, string | undefined> = process.env, connect?: ConnectFn, fetchImpl: typeof fetch = fetch): AgentClient | undefined {
+  const claude = env.ANTHROPIC_API_KEY ? anthropicAgent(env.ANTHROPIC_API_KEY, env.AI_MODEL || DEFAULT_MODEL, fetchImpl) : undefined;
+  const cheap = env.AI_COMPAT_URL && env.AI_COMPAT_KEY && env.AI_COMPAT_MODEL && connect ? compatAgent(env.AI_COMPAT_URL, env.AI_COMPAT_KEY, env.AI_COMPAT_MODEL, connect, { fetchImpl, vision: env.AI_COMPAT_VISION === "1" }) : undefined;
+  if (!claude && !cheap) return undefined;
+  const fallback: Provider = env.AI_DEFAULT_PROVIDER === "cheap" && cheap ? "cheap" : claude ? "claude" : "cheap";
+  return (req) => {
+    const want = req.provider ?? fallback;
+    const useCheap = want === "cheap" ? !!cheap || !claude : !claude;
+    return useCheap ? cheap!({ ...req, model: req.provider === "cheap" ? req.model : undefined }) : claude!(req);
+  };
 }
 
 export const AGENT_PROMPT = `You are the owner's assistant inside their own WhatsApp. The owner wrote you a task. Do it with the tools you were given and then report briefly what you did, in the owner's language.
