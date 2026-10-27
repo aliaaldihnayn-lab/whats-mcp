@@ -1,41 +1,133 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Nav, SecretGate, call, errMsg, phoneOf, useCopy, when, type Status } from "./shared";
 
-type Status = { paired: boolean; me?: string; name?: string; lastSync?: number | null; cachedChats?: number; storage?: boolean };
-type Step = "idle" | "requesting" | "code" | "linked" | "done" | "error";
+type Key = { id: string; label: string; accounts: string[] | "*"; scope: "read" | "full"; createdAt: number; lastUsed?: number };
+type Created = { token: string; url: string; label: string; accounts: string[] | "*"; scope: "read" | "full" };
 
 export function LinkPanel({ origin }: { origin: string }) {
-  const [secret, setSecret] = useState("");
-  const [status, setStatus] = useState<Status | null>(null);
-  const [statusErr, setStatusErr] = useState("");
+  return (
+    <div className="dash-page">
+      <Nav current="link" />
+      <SecretGate>{(secret, status, reload) => <Home secret={secret} status={status} reload={reload} origin={origin} />}</SecretGate>
+    </div>
+  );
+}
+
+function Home({ secret, status, reload, origin }: { secret: string; status: Status; reload: () => Promise<void>; origin: string }) {
+  return (
+    <>
+      <div className="chips">
+        <Chip ok={status.storage} label="قاعدة البيانات (Redis)" />
+        <Chip ok={status.cron} label="المزامنة اليومية (CRON_SECRET)" />
+        <Chip ok={status.ai} label="Claude للفلوات (ANTHROPIC_API_KEY)" optional />
+        <Chip ok={status.official} label="الرقم الرسمي (Cloud API)" optional />
+      </div>
+      {!status.storage && <div className="note"><p>اربط Upstash Redis من تبويب Storage في مشروعك على فيرسل، ثم أعد النشر. بدونها ما يمكن حفظ الجلسة.</p></div>}
+
+      <h3>أرقامك</h3>
+      <p className="muted">كل رقم يرتبط كجهاز مستقل، وله رسائله وفلواته. تقدر تضيف أكثر من رقم لك.</p>
+      <Numbers secret={secret} status={status} reload={reload} />
+
+      <h3 style={{ marginTop: 40 }}>اربطها بمساعدك</h3>
+      <p className="muted">
+        لكل جهاز أو شخص مفتاح خاص فيه رابط جاهز. تلصق الرابط في إعدادات المساعد وخلاص، بدون هيدرات. تقدر تحدد له أرقام معينة، أو تخليه للقراءة فقط، وتلغيه متى ما بغيت بدون ما يتأثر الباقي.
+      </p>
+      <Keys secret={secret} status={status} origin={origin} />
+    </>
+  );
+}
+
+function Chip({ ok, label, optional }: { ok: boolean; label: string; optional?: boolean }) {
+  return (
+    <span className={`chip ${ok ? "on" : optional ? "opt" : "off"}`}>
+      <span aria-hidden="true">{ok ? "✓" : optional ? "○" : "✗"}</span> {label}
+    </span>
+  );
+}
+
+// ---------- numbers ----------
+
+function Numbers({ secret, status, reload }: { secret: string; status: Status; reload: () => Promise<void> }) {
+  const [label, setLabel] = useState("");
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<string | null>(status.accounts.find((a) => !a.paired)?.id ?? null);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      const { account } = await call<{ account: { id: string } }>(secret, "/api/personal/accounts", { body: { label } });
+      setLabel("");
+      await reload();
+      setOpen(account.id);
+    } catch (err) {
+      setError(errMsg(err));
+    }
+  }
+
+  async function unlink(id: string) {
+    if (!confirm("فصل هذا الرقم من واتساب وحذف جلسته؟ رسائله المحفوظة تبقى.")) return;
+    await call(secret, "/api/personal/unlink", { body: { account: id } }).catch((e) => setError(errMsg(e)));
+    await reload();
+  }
+
+  async function remove(id: string) {
+    if (!confirm("حذف الرقم نهائياً مع كل رسائله وفلواته المحفوظة؟")) return;
+    await call(secret, `/api/personal/accounts?id=${id}`, { method: "DELETE" }).catch((e) => setError(errMsg(e)));
+    await reload();
+  }
+
+  return (
+    <div className="cards">
+      {status.accounts.map((a) => (
+        <div className="card" key={a.id}>
+          <div className="card-head">
+            <strong>{a.label}</strong>
+            <code>{a.id}</code>
+            {a.paired ? <span className="chip on">مربوط {phoneOf(a.me)}</span> : <span className="chip off">غير مربوط</span>}
+          </div>
+          {a.paired ? (
+            <>
+              <p className="muted">
+                آخر مزامنة: {when(a.lastSync)} · المحادثات المحفوظة: {a.cachedChats}
+              </p>
+              <div className="row">
+                <button className="btn ghost" type="button" onClick={() => unlink(a.id)}>افصل الجهاز</button>
+                {a.id !== "main" && <button className="btn ghost" type="button" onClick={() => remove(a.id)}>احذف الرقم</button>}
+              </div>
+            </>
+          ) : open === a.id ? (
+            <PairForm secret={secret} account={a.id} onDone={reload} />
+          ) : (
+            <div className="row">
+              <button className="btn solid" type="button" onClick={() => setOpen(a.id)}>اربط هذا الرقم</button>
+              {a.id !== "main" && <button className="btn ghost" type="button" onClick={() => remove(a.id)}>احذف</button>}
+            </div>
+          )}
+        </div>
+      ))}
+      <form className="card add" onSubmit={add}>
+        <label htmlFor="newnum">إضافة رقم آخر</label>
+        <div className="row">
+          <input id="newnum" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="اسم للرقم، مثل: الشغل" maxLength={40} required />
+          <button className="btn ghost" type="submit">أضف</button>
+        </div>
+        {error && <p className="err">{error}</p>}
+      </form>
+    </div>
+  );
+}
+
+type Step = "idle" | "requesting" | "code" | "linked" | "done" | "error";
+
+function PairForm({ secret, account, onDone }: { secret: string; account: string; onDone: () => Promise<void> }) {
   const [phone, setPhone] = useState("");
   const [step, setStep] = useState<Step>("idle");
   const [code, setCode] = useState("");
   const [history, setHistory] = useState(0);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    try {
-      const s = sessionStorage.getItem("whats-mcp-secret");
-      if (s) setSecret(s);
-    } catch {}
-  }, []);
-
-  async function loadStatus(s = secret) {
-    setStatusErr("");
-    const r = await fetch("/api/personal/status", { headers: { Authorization: `Bearer ${s}` } });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setStatus(null);
-      setStatusErr(d.error ?? "تعذر قراءة الحالة");
-      return;
-    }
-    setStatus(d);
-    try {
-      sessionStorage.setItem("whats-mcp-secret", s);
-    } catch {}
-  }
 
   async function link(e: React.FormEvent) {
     e.preventDefault();
@@ -47,7 +139,7 @@ export function LinkPanel({ origin }: { origin: string }) {
       const r = await fetch("/api/personal/pair", {
         method: "POST",
         headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, account }),
       });
       if (!r.ok || !r.body) {
         const d = await r.json().catch(() => ({}));
@@ -75,88 +167,143 @@ export function LinkPanel({ origin }: { origin: string }) {
           } else if (ev.type === "error") throw new Error(ev.message);
         }
       }
-      await loadStatus();
+      await onDone();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errMsg(err));
       setStep("error");
     }
   }
 
-  async function unlink() {
-    if (!confirm("فصل هذا الجهاز من واتساب وحذف الجلسة؟")) return;
-    await fetch("/api/personal/unlink", { method: "POST", headers: { Authorization: `Bearer ${secret}` } });
-    await loadStatus();
+  return (
+    <>
+      <form className="field" onSubmit={link}>
+        <label htmlFor={`phone-${account}`}>رقم واتساب مع رمز الدولة</label>
+        <div className="row">
+          <input id={`phone-${account}`} dir="ltr" inputMode="tel" placeholder="966501234567" value={phone} onChange={(e) => setPhone(e.target.value)} required />
+          <button className="btn solid" type="submit" disabled={step === "requesting" || step === "code" || step === "linked"}>اطلب رمز الربط</button>
+        </div>
+      </form>
+      {step === "requesting" && <p className="muted">نطلب الرمز من واتساب…</p>}
+      {step === "code" && (
+        <div className="pair-code">
+          <p>في جوالك: واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز ← الربط برقم الهاتف بدلاً من ذلك، واكتب:</p>
+          <output dir="ltr">{code}</output>
+          <p className="muted">الرمز صالح لدقائق قليلة. خل الصفحة مفتوحة.</p>
+        </div>
+      )}
+      {step === "linked" && <p>تم الربط. نحفظ محادثاتك الأخيرة… {history ? `(${history} رسالة)` : ""}</p>}
+      {step === "done" && <p>تم. حفظنا {history} رسالة من السجل.</p>}
+      {step === "error" && <p className="err">{error}</p>}
+    </>
+  );
+}
+
+// ---------- device keys ----------
+
+function Keys({ secret, status, origin }: { secret: string; status: Status; origin: string }) {
+  const [keys, setKeys] = useState<Key[]>([]);
+  const [label, setLabel] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [readOnly, setReadOnly] = useState(false);
+  const [created, setCreated] = useState<Created | null>(null);
+  const [error, setError] = useState("");
+  const { copied, copy } = useCopy();
+
+  const load = () => call<{ keys: Key[] }>(secret, "/api/personal/keys").then((d) => setKeys(d.keys), (e) => setError(errMsg(e)));
+  useEffect(() => {
+    void load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const names = (k: Key["accounts"]) => (k === "*" ? "كل الأرقام" : k.map((id) => status.accounts.find((a) => a.id === id)?.label ?? id).join("، "));
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      const accounts = picked.length === 0 || picked.length === status.accounts.length ? "*" : picked;
+      const d = await call<{ token: string; url: string }>(secret, "/api/personal/keys", { body: { label, accounts, scope: readOnly ? "read" : "full" } });
+      setCreated({ ...d, label, accounts, scope: readOnly ? "read" : "full" });
+      setLabel("");
+      await load();
+    } catch (err) {
+      setError(errMsg(err));
+    }
   }
 
-  const lastSync = status?.lastSync ? new Date(status.lastSync * 1000).toLocaleString("ar") : "لم تتم بعد";
+  async function revoke(k: Key) {
+    if (!confirm(`إلغاء مفتاح "${k.label}"؟ أي جهاز يستخدمه يتوقف فوراً.`)) return;
+    await call(secret, `/api/personal/keys?id=${k.id}`, { method: "DELETE" }).catch((e) => setError(errMsg(e)));
+    await load();
+  }
+
+  const claudeCode = created ? `claude mcp add --transport http whatsapp "${created.url}"` : "";
+  const json = created ? `{ "mcpServers": { "whatsapp": { "type": "http", "url": "${created.url}" } } }` : "";
 
   return (
-    <div className="panel">
-      <form
-        className="field"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void loadStatus();
-        }}
-      >
-        <label htmlFor="secret">كلمة السر (MCP_SECRET)</label>
+    <>
+      <form className="card" onSubmit={create}>
+        <label htmlFor="keylabel">مفتاح جديد</label>
         <div className="row">
-          <input id="secret" type="password" dir="ltr" autoComplete="current-password" value={secret} onChange={(e) => setSecret(e.target.value)} required minLength={24} />
-          <button className="btn ghost" type="submit">
-            افتح
-          </button>
+          <input id="keylabel" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="اسم الجهاز، مثل: لابتوب الشغل" maxLength={40} required />
+          <button className="btn solid" type="submit">أنشئ المفتاح</button>
         </div>
-        {statusErr && <p className="err">{statusErr}</p>}
+        <div className="opts">
+          {status.accounts.length > 1 && (
+            <fieldset>
+              <legend>الأرقام المسموحة (بدون اختيار = الكل)</legend>
+              {status.accounts.map((a) => (
+                <label key={a.id} className="check">
+                  <input type="checkbox" checked={picked.includes(a.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, a.id] : picked.filter((x) => x !== a.id))} /> {a.label}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <label className="check">
+            <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} /> للقراءة فقط (ما يقدر يرسل شي)
+          </label>
+        </div>
+        {error && <p className="err">{error}</p>}
       </form>
 
-      {status && (
-        <>
-          {!status.storage && <div className="note"><p>اربط Upstash Redis من تبويب Storage في مشروعك على فيرسل، ثم أعد النشر. بدونها ما يمكن حفظ الجلسة.</p></div>}
-
-          {status.paired ? (
-            <div className="linked">
-              <p>
-                <strong>مربوط</strong> {status.me ? <code>+{status.me.split(":")[0].split("@")[0]}</code> : null}
-              </p>
-              <p className="muted">
-                آخر مزامنة: {lastSync}، والمحادثات المحفوظة: {status.cachedChats ?? 0}
-              </p>
-              <button className="btn ghost" type="button" onClick={unlink}>
-                افصل الجهاز
-              </button>
-            </div>
-          ) : (
-            <form className="field" onSubmit={link}>
-              <label htmlFor="phone">رقم واتساب مع رمز الدولة</label>
-              <div className="row">
-                <input id="phone" dir="ltr" inputMode="tel" placeholder="966501234567" value={phone} onChange={(e) => setPhone(e.target.value)} required />
-                <button className="btn solid" type="submit" disabled={step === "requesting" || step === "code" || step === "linked"}>
-                  اطلب رمز الربط
-                </button>
-              </div>
-            </form>
-          )}
-
-          {step === "requesting" && <p className="muted">نطلب الرمز من واتساب…</p>}
-          {step === "code" && (
-            <div className="pair-code">
-              <p>في جوالك: واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز ← الربط برقم الهاتف بدلاً من ذلك، واكتب:</p>
-              <output dir="ltr">{code}</output>
-              <p className="muted">الرمز صالح لدقائق قليلة. خل الصفحة مفتوحة.</p>
-            </div>
-          )}
-          {step === "linked" && <p>تم الربط. نحفظ محادثاتك الأخيرة… {history ? `(${history} رسالة)` : ""}</p>}
-          {step === "done" && <p>تم. حفظنا {history} رسالة من السجل، والرسائل الجديدة توصل مع كل طلب.</p>}
-          {step === "error" && <p className="err">{error}</p>}
-
-          <h3>أضفه لمساعدك</h3>
-          <pre className="snippet" dir="ltr">{`{ "mcpServers": { "whatsapp": {
-    "type": "http",
-    "url": "${origin}/api/personal/mcp",
-    "headers": { "Authorization": "Bearer YOUR_MCP_SECRET" }
-} } }`}</pre>
-        </>
+      {created && (
+        <div className="card fresh" role="status">
+          <p>
+            <strong>مفتاح "{created.label}" جاهز.</strong> هذا الرابط يظهر مرة وحدة، انسخه الحين. كل من عنده الرابط يدخل على {names(created.accounts)} {created.scope === "read" ? "(قراءة فقط)" : ""}.
+          </p>
+          <p className="label">الرابط (للتطبيقات اللي تطلب رابط فقط)</p>
+          <div className="code"><pre dir="ltr">{created.url}</pre><button type="button" className="copy" onClick={() => copy(created.url, "url")}>{copied === "url" ? "تم النسخ" : "انسخ"}</button></div>
+          <p className="label">Claude Code (أمر واحد)</p>
+          <div className="code"><pre dir="ltr">{claudeCode}</pre><button type="button" className="copy" onClick={() => copy(claudeCode, "cc")}>{copied === "cc" ? "تم النسخ" : "انسخ"}</button></div>
+          <p className="label">Cursor / VS Code / ملف الإعدادات</p>
+          <div className="code"><pre dir="ltr">{json}</pre><button type="button" className="copy" onClick={() => copy(json, "js")}>{copied === "js" ? "تم النسخ" : "انسخ"}</button></div>
+          <p className="muted">
+            في تطبيق Claude: الإعدادات ← الموصلات ← إضافة موصل مخصص، والصق الرابط (اترك خانة OAuth فاضية). لتثبيت الرابط على رقم واحد أضف <code>&amp;account=رقم_المعرف</code> في آخره.
+          </p>
+          <button className="btn ghost" type="button" onClick={() => setCreated(null)}>نسخت، اخفِ</button>
+        </div>
       )}
-    </div>
+
+      {keys.length > 0 && (
+        <table className="compare keys">
+          <thead>
+            <tr><th>الاسم</th><th>الأرقام</th><th>الصلاحية</th><th>آخر استخدام</th><th /></tr>
+          </thead>
+          <tbody>
+            {keys.map((k) => (
+              <tr key={k.id}>
+                <td>{k.label}</td>
+                <td>{names(k.accounts)}</td>
+                <td>{k.scope === "read" ? "قراءة" : "قراءة وإرسال"}</td>
+                <td>{k.lastUsed ? when(k.lastUsed / 1000) : "لم يُستخدم"}</td>
+                <td><button className="btn ghost small" type="button" onClick={() => revoke(k)}>إلغاء</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="muted" style={{ marginTop: 16 }}>
+        مفتاحك الرئيسي (<code>MCP_SECRET</code>) يفتح كل شي ويدخلك هذي اللوحة، فلا تعطيه لأحد. للمفاتيح السريعة بدون لوحة تقدر تضيف <code>MCP_SECRETS</code> في فيرسل (قيم مفصولة بفاصلة)، لكنها بكل الصلاحيات وما تنلغى إلا بحذفها من هناك.
+      </p>
+    </>
   );
 }

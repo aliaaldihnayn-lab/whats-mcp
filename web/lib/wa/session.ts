@@ -87,13 +87,16 @@ export function toStored(msg: WAMessage): StoredMessage | null {
   return out;
 }
 
-async function ingest(store: Store, messages: WAMessage[]) {
+async function ingest(store: Store, messages: WAMessage[], fresh?: StoredMessage[]) {
   let n = 0;
   for (const msg of messages) {
     const s = toStored(msg);
     if (!s) continue;
+    // Only messages we have never stored count as new, so replays never re-trigger flows.
+    const isNew = fresh ? !(await store.getMessage(s.id)) : false;
     await store.saveMessage(s);
     if (s.senderName && !s.waId.endsWith("@g.us")) await store.setName(s.waId, s.senderName);
+    if (isNew) fresh!.push(s);
     n++;
   }
   return n;
@@ -106,6 +109,12 @@ export type RunOptions = {
   drain?: boolean;
   /** Hard cap for the whole connection, in ms. */
   maxMs?: number;
+  /**
+   * Runs after the offline messages are stored and before `action`, with the
+   * connection still open. `fresh` lists messages that arrived live since the
+   * last connection. Failures here never fail the sync.
+   */
+  afterDrain?: (ctx: { sock: WASocket; fresh: StoredMessage[]; deadline: number }) => Promise<void>;
 };
 
 export type RunResult<T> = { result: T; ingested: number };
@@ -144,6 +153,8 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
   }
 
   let ingested = 0;
+  const fresh: StoredMessage[] = [];
+  const track = opts.afterDrain ? fresh : undefined;
   let lastEvent = Date.now();
   const work = new Set<Promise<unknown>>();
   const bg = (p: Promise<unknown>) => {
@@ -160,9 +171,9 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
     printQRInTerminal: false,
   } as any);
   sock.ev.on("creds.update", auth.saveCreds);
-  sock.ev.on("messages.upsert", ({ messages }) => {
+  sock.ev.on("messages.upsert", ({ messages, type }) => {
     lastEvent = Date.now();
-    bg(ingest(store, messages).then((n) => (ingested += n)));
+    bg(ingest(store, messages, type === "notify" ? track : undefined).then((n) => (ingested += n)));
   });
   sock.ev.on("messaging-history.set", ({ messages, contacts }) => {
     lastEvent = Date.now();
@@ -200,6 +211,15 @@ export async function withWhatsApp<T>({ raw, store }: SessionDeps, action: (sock
       const drainUntil = Math.min(deadline - 10_000, Date.now() + 15_000);
       await new Promise((r) => setTimeout(r, 2_500));
       while (Date.now() - lastEvent < 2_500 && Date.now() < drainUntil) await new Promise((r) => setTimeout(r, 500));
+    }
+
+    if (opts.afterDrain) {
+      while (work.size) await Promise.allSettled([...work]);
+      try {
+        await opts.afterDrain({ sock, fresh, deadline: deadline - 6_000 });
+      } catch (e) {
+        console.error("flows failed", e);
+      }
     }
 
     const result = await action(sock);

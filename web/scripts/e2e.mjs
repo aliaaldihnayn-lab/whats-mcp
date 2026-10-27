@@ -14,6 +14,7 @@ const env = {
   META_APP_SECRET: "app-secret",
   WEBHOOK_VERIFY_TOKEN: "verify-me",
   WHATSAPP_PHONE_NUMBER_ID: "PN1",
+  ALLOW_MEMORY_STORE: "1",
   KV_REST_API_URL: "",
   UPSTASH_REDIS_REST_URL: "",
 };
@@ -100,11 +101,11 @@ try {
   r = await fetch(`${base}/api/personal/status`);
   assert.equal(r.status, 401);
   r = await fetch(`${base}/api/personal/status`, { headers: { Authorization: `Bearer ${env.MCP_SECRET}` } });
-  assert.equal((await r.json()).paired, false);
+  assert.equal((await r.json()).accounts[0].paired, false);
   assert.equal((await mcp("tools/list", {}, false, "/api/personal/mcp")).status, 401);
   const ptools = (await mcp("tools/list", {}, true, "/api/personal/mcp")).data.result.tools.map((t) => t.name);
   console.log("personal tools:", ptools.join(", "));
-  assert.equal(ptools.length, 11);
+  assert.equal(ptools.length, 12);
   const st = await mcp("tools/call", { name: "get_status", arguments: {} }, true, "/api/personal/mcp");
   assert.ok(st.data.result.content[0].text.includes('"paired": false'));
   const sy = await mcp("tools/call", { name: "sync", arguments: {} }, true, "/api/personal/mcp");

@@ -73,6 +73,10 @@ export class Store {
     if (name) await this.kv.set(`${this.p}n:${waId}`, name);
   }
 
+  async getName(waId: string) {
+    return (await this.kv.get<string>(`${this.p}n:${waId}`)) ?? undefined;
+  }
+
   async updateStatus(id: string, status: string, error?: string) {
     const m = await this.kv.get<StoredMessage>(`${this.p}m:${id}`);
     const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };

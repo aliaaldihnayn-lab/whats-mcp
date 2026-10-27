@@ -1,15 +1,27 @@
-import { isAuthorized } from "@/lib/auth";
-import { personal } from "@/lib/runtime";
+import { admin } from "@/lib/admin";
+import { listAccounts } from "@/lib/wa/accounts";
 import { isPaired } from "@/lib/wa/auth";
 import { lastSync } from "@/lib/wa/session";
+import { isPaused } from "@/lib/flows/storage";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const { cfg, raw, store } = personal();
-  if (!isAuthorized(req, cfg.mcpSecret)) return Response.json({ error: "Wrong or missing MCP_SECRET." }, { status: 401 });
-  const p = await isPaired(raw);
-  const last = await lastSync(raw);
-  const chats = await store.conversations(200);
-  return Response.json({ ...p, lastSync: last, cachedChats: chats.length, storage: !!cfg.redisUrl });
+  const a = await admin(req);
+  if (a instanceof Response) return a;
+  const accounts = await Promise.all(
+    (await listAccounts(a.base)).map(async (acc) => {
+      const d = a.account(acc.id);
+      const [info, last, chats] = await Promise.all([isPaired(d.raw), lastSync(d.raw), d.store.conversations(200)]);
+      return { id: acc.id, label: acc.label, ...info, lastSync: last, cachedChats: chats.length };
+    }),
+  );
+  return Response.json({
+    accounts,
+    storage: !!a.cfg.redisUrl,
+    ai: !!process.env.ANTHROPIC_API_KEY,
+    cron: !!process.env.CRON_SECRET,
+    official: !!a.cfg.accessToken && !!a.cfg.phoneNumberId,
+    flowsPaused: await isPaused(a.base),
+  });
 }

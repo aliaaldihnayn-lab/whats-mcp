@@ -69,11 +69,11 @@ export function toStored(raw: any, waId: string, direction: "in" | "out", source
   return m;
 }
 
-export type IngestStats = { messages: number; statuses: number; echoes: number };
+export type IngestStats = { messages: number; statuses: number; echoes: number; /** inbound messages we had never seen, for flows */ fresh: StoredMessage[] };
 
 /** Applies a full webhook body to the store. Unknown fields are ignored. */
 export async function ingest(body: any, store: Store, phoneNumberId?: string): Promise<IngestStats> {
-  const stats: IngestStats = { messages: 0, statuses: 0, echoes: 0 };
+  const stats: IngestStats = { messages: 0, statuses: 0, echoes: 0, fresh: [] };
   if (body?.object !== "whatsapp_business_account") return stats;
   for (const entry of body.entry ?? []) {
     for (const change of entry.changes ?? []) {
@@ -84,7 +84,10 @@ export async function ingest(body: any, store: Store, phoneNumberId?: string): P
       if (change.field === "messages") {
         for (const c of v.contacts ?? []) await store.setName(c.wa_id, c.profile?.name ?? "");
         for (const raw of v.messages ?? []) {
-          await store.saveMessage(toStored(raw, raw.from, "in", "api"));
+          const m = toStored(raw, raw.from, "in", "api");
+          const isNew = !(await store.getMessage(m.id));
+          await store.saveMessage(m);
+          if (isNew) stats.fresh.push(m);
           stats.messages++;
         }
         for (const s of v.statuses ?? []) {
