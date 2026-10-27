@@ -9,7 +9,7 @@
 ## الخطوات مع كل عميل (حوالي 10 دقائق)
 1. العميل ينشئ حساب Vercel (Hobby مجاني) ويربطه بحساب GitHub.
 2. يضغط **ولّد كلمتي السر** في الصفحة الرئيسية (تنولد في متصفحه فقط) ويحفظهم، ثم يضغط **انشر نسختك** ويلصقهم في `MCP_SECRET` و `CRON_SECRET`.
-3. التأكد من قاعدة البيانات: Storage فيها Upstash Redis مربوطة بالمشروع، وإلا أضفها ثم Redeploy.
+3. قاعدة البيانات: Storage ← Create ← Upstash ← Redis ← الخطة المجانية ← Connect ثم Redeploy. لو الخطة المجانية ما ظهرت (قاعدة مجانية وحدة لكل حساب Upstash) أنشئ واحدة من console.upstash.com وضع `KV_REST_API_URL` و`KV_REST_API_TOKEN` يدوياً.
 4. في Vercel ← Settings ← Deployment Protection: يوقف الحماية (Vercel Authentication) عن النشر الإنتاجي، وإلا Claude ما يقدر يوصل للرابط.
 5. إضافة المتغيرات الاختيارية ثم Redeploy:
    - `ANTHROPIC_API_KEY` للمساعد بـ Claude، أو `AI_COMPAT_URL` و `AI_COMPAT_KEY` و `AI_COMPAT_MODEL` لمزود أرخص.
