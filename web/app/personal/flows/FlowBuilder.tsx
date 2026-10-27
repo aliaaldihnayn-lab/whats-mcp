@@ -4,9 +4,11 @@ import { createContext, useCallback, useContext, useMemo, useState } from "react
 import { Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { flowToGraph, freshId, unreachable, X_STEP, Y_STEP } from "@/lib/flows/graph";
+import { exportFlows } from "@/lib/flows/portable";
 import { Graph, type Action, type Cond, type GraphEdge, type GraphNode, type Trigger } from "@/lib/flows/types";
 import { call, errMsg } from "../shared";
 import { ActionFields } from "./ActionFields";
+import { downloadJson, fileSafe } from "./download";
 import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, newAction, type ActionType, type EF } from "./presets";
 
 type Port = GraphEdge["port"];
@@ -242,6 +244,7 @@ export function FlowBuilder(props: Props) {
         <span className="grow" />
         {orphans.length > 0 && <span className="chip off" title="عقد ما توصل لها من المحفز، فما راح تشتغل">⚠ {orphans.length} عقدة غير موصولة</span>}
         <button type="button" className="btn ghost small" onClick={() => setAdding({})}>+ عقدة</button>
+        <button type="button" className="btn ghost small" title="ينزّل الفلو كملف JSON (بدون قيم الترويسات)" onClick={() => downloadJson(fileSafe(f.name), exportFlows([build()]))}>تصدير</button>
         <button type="button" className="btn solid" onClick={save} disabled={saving}>{saving ? "نحفظ…" : "احفظ الفلو"}</button>
         <button type="button" className="btn ghost" onClick={onCancel}>إغلاق</button>
         {f.id && <button type="button" className="btn ghost danger" onClick={() => onDelete(value)}>احذف</button>}

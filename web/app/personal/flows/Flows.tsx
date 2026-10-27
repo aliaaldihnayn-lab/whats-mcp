@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Action, Cond, Flow } from "@/lib/flows/types";
 import { call, errMsg, invalidate, useApi, useCopy, useSession } from "../shared";
+import { exportFlows, parseImport } from "@/lib/flows/portable";
 import { FlowBuilder } from "./FlowBuilder";
+import { downloadJson, fileSafe } from "./download";
 import { STATUS_LABEL, fmtMs } from "./RunDetail";
 import { ACTION_LABEL, PRESETS, blankFlow, type ActionType, type EF } from "./presets";
 
@@ -27,6 +29,8 @@ function App({ secret }: { secret: string }) {
   const [tab, setTab] = useState<"flows" | "log">(useSearchParams().get("tab") === "log" ? "log" : "flows");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     invalidate("/api/personal/flows");
@@ -46,6 +50,27 @@ function App({ secret }: { secret: string }) {
       setError(errMsg(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Files are checked here for a clear message and again by the server when each flow is saved.
+  async function importFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setError("");
+    setNotice([]);
+    try {
+      const notes = new Set<string>();
+      const saved: Flow[] = [];
+      for (const file of Array.from(files)) {
+        const { flows, warnings } = parseImport(await file.text());
+        warnings.forEach((w) => notes.add(w));
+        for (const f of flows) saved.push((await call<{ flow: Flow }>(secret, "/api/personal/flows", { method: "PUT", body: { flow: f } })).flow);
+      }
+      await load();
+      setNotice([`انستوردت ${saved.length} ${saved.length === 1 ? "فلو" : "فلوات"}.`, ...notes]);
+      if (saved.length === 1) setEdit(toEF(saved[0]));
+    } catch (e) {
+      setError(errMsg(e));
     }
   }
 
@@ -100,8 +125,20 @@ function App({ secret }: { secret: string }) {
           <section>
             <div className="section-head">
               <h4>فلواتك</h4>
-              <button type="button" className="btn solid small" onClick={() => setEdit(blankFlow())}>+ فلو جديد</button>
+              <div className="row">
+                <input ref={fileInput} type="file" accept=".json,application/json" multiple hidden onChange={(e) => { void importFiles(e.target.files); e.target.value = ""; }} />
+                <button type="button" className="btn ghost small" onClick={() => fileInput.current?.click()}>استيراد</button>
+                {data.flows.length > 0 && <button type="button" className="btn ghost small" onClick={() => downloadJson("whats-mcp-flows", exportFlows(data.flows))}>تصدير الكل</button>}
+                <button type="button" className="btn solid small" onClick={() => setEdit(blankFlow())}>+ فلو جديد</button>
+              </div>
             </div>
+            {error && <div className="banner bad">{error}</div>}
+            {notice.length > 0 && (
+              <div className="note" role="status">
+                <ul className="notice-list">{notice.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                <button type="button" className="btn ghost small" onClick={() => setNotice([])}>تمام</button>
+              </div>
+            )}
             <div className="flowlist">
               {data.flows.map((f) => (
                 <div key={f.id} className="flowrow">
@@ -111,6 +148,7 @@ function App({ secret }: { secret: string }) {
                       {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
                     </span>
                   </button>
+                  <button type="button" className="btn ghost small" title="تنزيل هذا الفلو كملف JSON" onClick={() => downloadJson(fileSafe(f.name), exportFlows([f]))}>تصدير</button>
                   <label className="sw small" title={f.enabled ? "مفعّل" : "متوقف"}><input type="checkbox" checked={f.enabled} onChange={() => toggle(f)} aria-label={`تفعيل ${f.name}`} /></label>
                 </div>
               ))}

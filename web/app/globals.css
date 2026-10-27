@@ -593,3 +593,7 @@ h1, h2, h3 { font-family: var(--display); }
 .chart .bar-out { fill: #8b7bd8; }
 .chart .axis { fill: var(--muted); font: 11px var(--body); }
 @media (max-width: 960px) { .app .two { grid-template-columns: 1fr; } }
+
+/* import / export */
+.app .notice-list { margin: 0 0 10px; padding-inline-start: 20px; display: grid; gap: 4px; }
+.app .section-head .row { gap: 8px; flex-wrap: wrap; }
