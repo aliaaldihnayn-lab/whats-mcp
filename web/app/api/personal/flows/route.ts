@@ -62,7 +62,7 @@ export async function DELETE(req: Request) {
   return Response.json({ deleted: true });
 }
 
-// { op: "pause", paused } | { op: "reorder", ids } | { op: "test", flow, sample, useAi }
+// { op: "pause", paused } | { op: "reorder", ids } | { op: "test", flow, sample, useAi } | { op: "replay", run, useAi }
 export async function POST(req: Request) {
   const a = await admin(req);
   if (a instanceof Response) return a;
@@ -74,6 +74,38 @@ export async function POST(req: Request) {
   if (b.op === "reorder" && Array.isArray(b.ids)) {
     await reorderFlows(a.base, b.ids.map(String));
     return Response.json({ ok: true });
+  }
+  // { op: "replay", run, useAi }: runs the flow's current version on the message a past run saw, in dry mode.
+  // The message, number and time all come from the stored run, never from the request.
+  if (b.op === "replay") {
+    const id = String(b.run ?? "");
+    for (const row of await targets(a)) {
+      const t = await target(a, row.id);
+      if (!t) continue;
+      const run = (await readLog(t.state)).find((l) => l.id === id);
+      if (!run) continue;
+      const f = (await listFlows(a.base)).find((x) => x.id === run.flow);
+      if (!f) return err("This flow was deleted, so the run cannot be replayed.", 404);
+      const me = t.kind === "personal" ? (await isPaired(t.state)).me?.split("@")[0].split(":")[0] : undefined;
+      const channel: Channel = {
+        account: t.id, kind: t.kind, me,
+        sendText: async () => { throw new Error("replay only"); },
+        react: async () => {},
+        markRead: async () => {},
+        resolveTarget: t.resolve,
+      };
+      const tr = run.trigger;
+      const sample = run.chat
+        ? { id: run.msg, timestamp: Math.floor(run.t / 1000), text: tr?.text ?? run.text ?? "", sender: tr?.sender, senderName: tr?.senderName ?? run.chatName, chat: run.chat, type: tr?.type, direction: tr?.direction === "out" ? ("out" as const) : ("in" as const) }
+        : {};
+      try {
+        const result = await testFlow({ ...f, activeFrom: 0 }, sample, { flows: [], state: new MemoryRawKV(), store: t.store, channel, ai: b.useAi ? aiFromEnv() : undefined }, run.t);
+        return Response.json({ ...result, changed: f.updatedAt > run.t });
+      } catch (e) {
+        return err(e);
+      }
+    }
+    return err("Run not found. It may have expired from the log.", 404);
   }
   if (b.op === "test") {
     const parsed = FlowInput.safeParse(b.flow);

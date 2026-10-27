@@ -547,3 +547,34 @@ test("run details: AI output is capped, linear flows get the same fields, ids ar
   assert.equal(logs[0].actions[0].output?.length, 1500);
   assert.equal(typeof logs[0].ms, "number");
 });
+
+// ---------- replay (testFlow with a stored run's message) ----------
+
+test("replay: uses the stored message id and time, so is_first and hour match the original run", async () => {
+  const flow = mkFlow({ tz: "UTC", conditions: [{ field: "is_first", op: "is_true" }, { field: "hour", op: "lt", value: "12" }], actions: [{ type: "reply", text: "welcome", quote: false }] });
+  const { deps, store } = setup([]);
+  const first = msg({ id: "first1", timestamp: Math.floor(NOW / 1000) - 5000 });
+  const later = msg({ id: "later1", timestamp: Math.floor(NOW / 1000) - 100 });
+  await store.saveMessage(first);
+  await store.saveMessage(later);
+  const at = (m: StoredMessage) => testFlow(flow, { id: m.id, timestamp: m.timestamp, text: m.text, chat: m.waId }, deps, m.timestamp * 1000);
+  const morning = Date.UTC(2026, 5, 1, 9, 0, 0) / 1000;
+  const evening = Date.UTC(2026, 5, 1, 19, 0, 0) / 1000;
+  const a = await testFlow(flow, { id: "first1", timestamp: morning, text: "x", chat: CHAT }, deps, morning * 1000);
+  assert.equal(a.conditions.find((c) => c.field === "hour")?.ok, true, "09:00 is before noon");
+  const b = await testFlow(flow, { id: "first1", timestamp: evening, text: "x", chat: CHAT }, deps, evening * 1000);
+  assert.equal(b.conditions.find((c) => c.field === "hour")?.ok, false, "19:00 is not");
+  assert.equal((await at(first)).conditions.find((c) => c.field === "is_first")?.ok, true, "the first message has nothing earlier");
+  assert.equal((await at(later)).conditions.find((c) => c.field === "is_first")?.ok, false, "a later message does");
+});
+
+test("replay: a scheduled flow runs without a message, a chat-only action reports why it cannot", async () => {
+  const flow = mkFlow({ trigger: { type: "schedule", everyMinutes: 60 }, actions: [{ type: "send", to: "me", text: "تقرير {{date}}" }, { type: "reply", text: "x", quote: false }] });
+  const { deps, sent } = setup([]);
+  const r = await testFlow(flow, {}, deps, NOW);
+  assert.equal(r.triggered, true);
+  assert.match(r.actions[0].detail ?? "", /^would send to 966500000099@s.whatsapp.net: تقرير 20/);
+  assert.equal(r.actions[1].ok, false);
+  assert.match(r.actions[1].detail ?? "", /needs a conversation/);
+  assert.equal(sent.length, 0);
+});

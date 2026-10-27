@@ -674,17 +674,20 @@ export async function runFlows(d: EngineDeps, fresh: StoredMessage[] = [], now =
 
 // ---------- dry run for the dashboard ----------
 
-export type TestSample = { text?: string; sender?: string; senderName?: string; chat?: string; type?: string; direction?: "in" | "out"; replyTo?: string };
+/** `id` and `timestamp` let a replay look the message up in the store (is_first) the way the original run did. */
+export type TestSample = { id?: string; timestamp?: number; text?: string; sender?: string; senderName?: string; chat?: string; type?: string; direction?: "in" | "out"; replyTo?: string };
 
 /** Evaluates one flow against a made-up message without sending or saving anything. */
 export async function testFlow(flow: Flow, sample: TestSample, d: EngineDeps, now = Date.now()) {
   const chat = sample.chat || `${sample.sender || "966500000000"}@s.whatsapp.net`;
   const msg: StoredMessage = {
-    id: "test", waId: chat, direction: sample.direction ?? "in", type: sample.type || "text", text: sample.text ?? "", timestamp: Math.floor(now / 1000),
+    id: sample.id ?? "test", waId: chat, direction: sample.direction ?? "in", type: sample.type || "text", text: sample.text ?? "", timestamp: sample.timestamp ?? Math.floor(now / 1000),
     sender: sample.sender || chat.split("@")[0], senderName: sample.senderName, replyTo: sample.replyTo,
   };
-  const x = makeCtx(flow, d, now, msg, sample.senderName, []);
-  const triggered = flow.trigger.type === "message" ? triggerMatches({ ...flow, activeFrom: 0 }, msg, now) : true;
+  // A scheduled flow has no message, so it runs without one here too.
+  const scheduled = flow.trigger.type === "schedule";
+  const x = makeCtx(flow, d, now, scheduled ? undefined : msg, sample.senderName, []);
+  const triggered = scheduled ? true : triggerMatches({ ...flow, activeFrom: 0 }, msg, now);
   const m = await matches(flow, x, d, true);
   const dry = { ...d, flows: [] };
   const run = triggered && m.ok ? (flow.graph ? await runGraph(flow, flow.graph, x, dry, "dry") : { ...(await runActions(flow, x, dry, "dry")), acted: true }) : { results: [], status: "dry" as const, stop: false, acted: false };
