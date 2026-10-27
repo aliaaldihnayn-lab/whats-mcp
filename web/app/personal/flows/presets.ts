@@ -37,7 +37,7 @@ export const NO_VALUE = new Set(["is_true", "is_false", "is_empty", "not_empty"]
 
 export const ACTION_LABEL: Record<ActionType, string> = {
   reply: "ردّ في نفس المحادثة", ai_reply: "الذكاء الاصطناعي يرد في نفس المحادثة", send: "أرسل رسالة لرقم آخر (أو لي)", ai: "الذكاء الاصطناعي يجهز نص (يُستخدم في {{ai}})",
-  agent: "الذكاء الاصطناعي ينفذ مهمة بالموصلات (MCP)", react: "تفاعل بإيموجي", mark_read: "علّم كمقروءة", tag: "أضف وسم للمحادثة", webhook: "استدعِ رابط (Webhook)", stop: "أوقف باقي الفلوات لهذي الرسالة",
+  agent: "الذكاء الاصطناعي ينفذ مهمة بالموصلات (MCP)", react: "تفاعل بإيموجي", mark_read: "علّم كمقروءة", tag: "أضف وسم للمحادثة", webhook: "استدعِ رابط (Webhook)", delay: "انتظر قبل ما تكمل (تأخير)", stop: "أوقف باقي الفلوات لهذي الرسالة",
 };
 
 export function newAction(type: ActionType): Action {
@@ -51,6 +51,7 @@ export function newAction(type: ActionType): Action {
     case "ai": return { type, ...ai };
     case "agent": return { type, prompt: "", confirm: true, connectors: [], maxTokens: 2000 };
     case "webhook": return { type, url: "", method: "POST", headers: {} };
+    case "delay": return { type, minutes: 30, cancelOnReply: false };
     default: return { type } as Action;
   }
 }

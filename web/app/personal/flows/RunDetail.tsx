@@ -160,6 +160,7 @@ export function RunDetail({ id }: { id: string }) {
         </section>
       )}
 
+      {run.resumed && <div className="note"><p>هذا تشغيل متابعة: التشغيل الأصلي وقف عند عقدة انتظار وكمّل هنا. <Link href={`/personal/flows/run/${run.resumed}`}>افتح التشغيل الأصلي</Link></p></div>}
       {run.note && <div className={`banner ${run.status === "error" ? "bad" : "ok"}`}>{run.note}</div>}
       {flow?.changed && <div className="note"><p>الفلو تغيّر بعد هذا التشغيل، فالرسم قد لا يطابق اللي اشتغل فعلاً. الخطوات تحت هي المسجلة وقت التشغيل.</p></div>}
       {!flow && <div className="note"><p>هذا الفلو انحذف، فما أقدر أرسمه. الخطوات تحت هي المسجلة وقت التشغيل.</p></div>}

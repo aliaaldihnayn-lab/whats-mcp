@@ -37,6 +37,24 @@ export function ActionFields({ a, onChange, defaultPrompt, aiOn, cheapModel }: {
           <p className="hint">يستخدم الموصلات من صفحة قاعدة المعرفة. فقط رسائلك أنت (من رقمك) تُنفَّذ كمهام، وردّه يبدأ بـ 🤖 عشان ما يعيد نفسه.</p>
         </div>
       );
+    case "delay": {
+      const unit = a.minutes % 1440 === 0 ? 1440 : a.minutes % 60 === 0 ? 60 : 1;
+      const set = (amount: number, u: number) => onChange({ ...a, minutes: Math.min(20160, Math.max(1, Math.round(amount) || 1) * u) });
+      return (
+        <>
+          <div className="grid2">
+            <label>المدة<input type="number" min={1} value={a.minutes / unit} onChange={(e) => set(Number(e.target.value), unit)} /></label>
+            <label>الوحدة
+              <select value={unit} onChange={(e) => set(a.minutes / unit, Number(e.target.value))}>
+                <option value={1}>دقيقة</option><option value={60}>ساعة</option><option value={1440}>يوم</option>
+              </select>
+            </label>
+          </div>
+          <label className="sw small"><input type="checkbox" checked={a.cancelOnReply} onChange={(e) => onChange({ ...a, cancelOnReply: e.target.checked })} /> ألغِ الباقي لو الطرف الثاني كتب أثناء الانتظار</label>
+          <p className="hint">الخطوات اللي بعد الانتظار تكمل عند أول مزامنة بعد انتهاء المدة، مو بالثانية. المزامنة تلقائية مرة باليوم، وأسرع لو فعّلت مزامنة متكررة. الحد الأقصى 14 يوم، وأي انتظار تأخر أكثر من 3 أيام عن موعده يُحذف بدل ما يرسل متأخراً.</p>
+        </>
+      );
+    }
     case "webhook":
       return (
         <div className="grid2">

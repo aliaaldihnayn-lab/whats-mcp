@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { flowToGraph, freshId, unreachable, X_STEP, Y_STEP } from "@/lib/flows/graph";
 import { exportFlows } from "@/lib/flows/portable";
@@ -32,12 +32,13 @@ const MODE_NOTE: Record<EF["mode"], string> = {
 
 export const TITLE: Record<ActionType, string> = {
   reply: "ردّ", ai_reply: "رد بالذكاء الاصطناعي", send: "إرسال لرقم", ai: "توليد نص بالذكاء الاصطناعي", agent: "مساعد بالأدوات",
-  react: "تفاعل", mark_read: "تعليم كمقروءة", tag: "وسم", webhook: "Webhook", stop: "إيقاف الباقي",
+  react: "تفاعل", mark_read: "تعليم كمقروءة", tag: "وسم", webhook: "Webhook", delay: "انتظار", stop: "إيقاف الباقي",
 };
-export const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", stop: "⛔" };
+export const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", delay: "⏱", stop: "⛔" };
 const GROUPS: { title: string; types: ActionType[] }[] = [
   { title: "رسائل", types: ["reply", "send", "react", "mark_read"] },
   { title: "ذكاء اصطناعي", types: ["ai_reply", "ai", "agent"] },
+  { title: "الوقت", types: ["delay"] },
   { title: "أخرى", types: ["tag", "webhook", "stop"] },
 ];
 
@@ -63,6 +64,7 @@ function actionSummary(a: Action) {
     case "react": return a.emoji;
     case "tag": return a.tag;
     case "webhook": return clip(a.url);
+    case "delay": return `${a.minutes % 1440 === 0 ? `${a.minutes / 1440} يوم` : a.minutes % 60 === 0 ? `${a.minutes / 60} ساعة` : `${a.minutes} دقيقة`}${a.cancelOnReply ? " (يلغى لو ردّ)" : ""}`;
     case "ai_reply": case "ai": case "agent": return a.prompt ? clip(a.prompt) : "التعليمات الافتراضية";
     default: return "";
   }
@@ -168,6 +170,7 @@ export function FlowBuilder(props: Props) {
   const [f, setF] = useState<EF>(value);
   const [adding, setAdding] = useState<{ from?: string; port?: Port } | null>(null);
   const [localError, setLocalError] = useState("");
+  const flowRef = useRef<ReactFlowInstance<FNode, Edge> | null>(null);
   const set = <K extends keyof EF>(k: K, v: EF[K]) => setF((x) => ({ ...x, [k]: v }));
   const selected = adding ? undefined : nodes.find((n) => n.selected);
 
@@ -193,6 +196,8 @@ export function FlowBuilder(props: Props) {
     setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...toNode(spec), selected: true }]);
     if (adding?.from) setEdges((es) => [...es, toEdge({ from: adding.from!, port: adding.port ?? "next", to: id })]);
     setAdding(null);
+    // bring the new node into view: a long chain would otherwise add it off screen
+    setTimeout(() => flowRef.current?.setCenter(x + 118, y + 34, { zoom: Math.max(flowRef.current.getZoom(), 0.75), duration: 300 }), 60);
   };
 
   const onConnect = useCallback(
@@ -264,6 +269,7 @@ export function FlowBuilder(props: Props) {
               isValidConnection={isValid}
               onNodeClick={() => setAdding(null)}
               onPaneClick={() => setAdding(null)}
+              onInit={(i) => (flowRef.current = i)}
               fitView
               fitViewOptions={{ padding: 0.12, minZoom: 0.6, maxZoom: 1 }}
               minZoom={0.3}
