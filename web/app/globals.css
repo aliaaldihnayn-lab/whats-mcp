@@ -295,3 +295,4 @@ h1, h2, h3 { font-family: var(--display); }
 .envs { grid-template-columns: max-content minmax(0, 1fr); }
 @media (max-width: 760px) { .envs { grid-template-columns: 1fr; } .compare { min-width: 640px; } }
 .code pre { padding-right: 64px; }
+header.top nav .btn { padding: 6px 16px; color: var(--accent-ink); }

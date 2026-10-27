@@ -43,10 +43,12 @@ export default function Home() {
           </a>
           <nav aria-label="أقسام الصفحة">
             <a href="#features">الخصائص</a>
+            <a href="/guide">دليل الإعداد</a>
             <a href="#start">ابدأ</a>
             <a href="#modes">الطرق</a>
             <a href="#safety">الأمان</a>
             <a href={REPO}>الكود</a>
+            <a className="btn solid" href="/personal">افتح النظام</a>
           </nav>
         </header>
 
@@ -58,8 +60,9 @@ export default function Home() {
                 يقرأ رسائلك، يرد عن عملائك من هلب سنترك، وينفذ مهامك ويرسل لك التقارير. كل هذا من واتساب نفسه، بدون ما تفتح Claude.
               </p>
               <div className="actions">
-                <a className="btn solid" href={DEPLOY_URL}>انشر نسختك مجاناً</a>
-                <a className="btn ghost" href="#features">شوف الخصائص</a>
+                <a className="btn solid" href="/personal">افتح النظام</a>
+                <a className="btn ghost" href={DEPLOY_URL}>انشر نسختك مجاناً</a>
+                <a className="btn ghost" href="/guide">دليل الإعداد الكامل</a>
               </div>
             </div>
 
