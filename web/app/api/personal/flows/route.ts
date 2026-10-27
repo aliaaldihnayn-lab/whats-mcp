@@ -13,11 +13,26 @@ export async function GET(req: Request) {
   const a = await admin(req);
   if (a instanceof Response) return a;
   const accounts = await targets(a);
+  const runId = new URL(req.url).searchParams.get("run");
   const log = [];
   for (const row of accounts) {
     const t = await target(a, row.id);
-    if (t) log.push(...(await readLog(t.state)).map((l) => ({ ...l, accountLabel: row.label })));
+    if (!t) continue;
+    const rows = await readLog(t.state);
+    if (runId) {
+      const run = rows.find((l) => l.id === runId);
+      if (!run) continue;
+      const f = (await listFlows(a.base)).find((x) => x.id === run.flow);
+      return Response.json({
+        run: { ...run, accountLabel: row.label },
+        // enough of the flow to draw it; `changed` warns when it was edited after this run
+        flow: f && { id: f.id, name: f.name, trigger: f.trigger, match: f.match, conditions: f.conditions, actions: f.actions, graph: f.graph, changed: f.updatedAt > run.t },
+      });
+    }
+    // the list only needs the one-line summary of each step; the details page fetches the rest
+    log.push(...rows.map((l) => ({ ...l, trigger: undefined, accountLabel: row.label, actions: l.actions.map(({ output, checks, ...step }) => step) })));
   }
+  if (runId) return err("Run not found. It may have expired from the log.", 404);
   return Response.json({
     flows: await listFlows(a.base),
     paused: await isPaused(a.base),
@@ -25,7 +40,7 @@ export async function GET(req: Request) {
     accounts,
     fields: FIELDS,
     ops: OPS,
-    log: log.sort((x, y) => y.t - x.t).slice(0, 120),
+    log: log.sort((x, y) => y.t - x.t).slice(0, 200),
   });
 }
 
