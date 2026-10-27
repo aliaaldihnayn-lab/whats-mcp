@@ -1,8 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
-import { personal } from "@/lib/runtime";
-import { listAccounts } from "@/lib/wa/accounts";
+import { personal, rawFor, runtime } from "@/lib/runtime";
+import { normalizePhone } from "@/lib/graph";
+import { listAccounts, scopeRaw } from "@/lib/wa/accounts";
 import { isPaired } from "@/lib/wa/auth";
-import { syncAccount } from "@/lib/flows/sync";
+import { runOfficialFlows, syncAccount } from "@/lib/flows/sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -24,6 +25,8 @@ export async function GET(req: Request) {
   const { base, account } = personal();
   const only = new URL(req.url).searchParams.get("account");
   const accounts = (await listAccounts(base)).filter((a) => !only || a.id === only);
+  const cfg = runtime().cfg;
+  const runOfficial = !!cfg.accessToken && !!cfg.phoneNumberId && (!only || only === "official");
   const results = await Promise.all(
     accounts.map(async (acc) => {
       const d = account(acc.id);
@@ -36,5 +39,17 @@ export async function GET(req: Request) {
       }
     }),
   );
+  // The official number has no connection to open, but its flows still have work that is due:
+  // scheduled flows and runs waiting at a delay node. Nothing else would wake them between messages.
+  if (runOfficial) {
+    try {
+      const { store, graph } = runtime();
+      const b = rawFor(cfg);
+      const logs = await runOfficialFlows([], { base: b, store, graph, normalize: normalizePhone, state: scopeRaw(b, "off:") });
+      results.push({ account: "official", synced: true, newMessages: 0, flowRuns: logs.length } as (typeof results)[number]);
+    } catch (e) {
+      results.push({ account: "official", synced: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
   return Response.json({ results }, { status: results.some((r) => "error" in r) ? 500 : 200 });
 }

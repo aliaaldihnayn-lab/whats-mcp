@@ -1,18 +1,20 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { flowToGraph, freshId, unreachable, X_STEP, Y_STEP } from "@/lib/flows/graph";
+import { exportFlows } from "@/lib/flows/portable";
 import { Graph, type Action, type Cond, type GraphEdge, type GraphNode, type Trigger } from "@/lib/flows/types";
-import { call, errMsg } from "../shared";
+import { call, errMsg, useCopy } from "../shared";
 import { ActionFields } from "./ActionFields";
+import { downloadJson, fileSafe } from "./download";
 import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, newAction, type ActionType, type EF } from "./presets";
 
 type Port = GraphEdge["port"];
 type Spec = GraphNode;
-type RunMark = { ok: boolean; detail?: string };
-type FNode = Node<{ spec: Spec; run?: RunMark }, Spec["kind"]>;
+export type RunMark = { ok: boolean; detail?: string };
+export type FNode = Node<{ spec: Spec; run?: RunMark }, Spec["kind"]>;
 
 export type BuilderData = {
   ai: { configured: boolean; cheap?: boolean; cheapModel?: string; defaultPrompt: string };
@@ -28,14 +30,15 @@ const MODE_NOTE: Record<EF["mode"], string> = {
   dry: "تجربة: يقيّم الشروط ويكتب في السجل إيش كان بيسوي، بدون ما يرسل أو يعلّم أي شي.",
 };
 
-const TITLE: Record<ActionType, string> = {
+export const TITLE: Record<ActionType, string> = {
   reply: "ردّ", ai_reply: "رد بالذكاء الاصطناعي", send: "إرسال لرقم", ai: "توليد نص بالذكاء الاصطناعي", agent: "مساعد بالأدوات",
-  react: "تفاعل", mark_read: "تعليم كمقروءة", tag: "وسم", webhook: "Webhook", stop: "إيقاف الباقي",
+  react: "تفاعل", mark_read: "تعليم كمقروءة", tag: "وسم", webhook: "Webhook", delay: "انتظار", stop: "إيقاف الباقي",
 };
-const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", stop: "⛔" };
+export const ICON: Record<string, string> = { trigger: "⚡", condition: "🔀", reply: "💬", ai_reply: "🤖", send: "📤", ai: "✨", agent: "🛠", react: "😀", mark_read: "✓", tag: "🏷", webhook: "🔗", delay: "⏱", stop: "⛔" };
 const GROUPS: { title: string; types: ActionType[] }[] = [
   { title: "رسائل", types: ["reply", "send", "react", "mark_read"] },
   { title: "ذكاء اصطناعي", types: ["ai_reply", "ai", "agent"] },
+  { title: "الوقت", types: ["delay"] },
   { title: "أخرى", types: ["tag", "webhook", "stop"] },
 ];
 
@@ -45,6 +48,7 @@ const clip = (s: string, n = 46) => (s.length > n ? s.slice(0, n) + "…" : s);
 
 function triggerSummary(t: Trigger) {
   if (t.type === "message") return `${DIR[t.direction]} · ${CHATS[t.chats]}`;
+  if (t.type === "webhook") return "لما يوصل طلب Webhook موقّع";
   return t.atHour !== undefined ? `يومياً بعد الساعة ${t.atHour}:00` : `كل ${t.everyMinutes} دقيقة`;
 }
 function condSummary(conds: Cond[]) {
@@ -61,6 +65,7 @@ function actionSummary(a: Action) {
     case "react": return a.emoji;
     case "tag": return a.tag;
     case "webhook": return clip(a.url);
+    case "delay": return `${a.minutes % 1440 === 0 ? `${a.minutes / 1440} يوم` : a.minutes % 60 === 0 ? `${a.minutes / 60} ساعة` : `${a.minutes} دقيقة`}${a.cancelOnReply ? " (يلغى لو ردّ)" : ""}`;
     case "ai_reply": case "ai": case "agent": return a.prompt ? clip(a.prompt) : "التعليمات الافتراضية";
     default: return "";
   }
@@ -70,11 +75,12 @@ const specTitle = (s: Spec) => (s.kind === "trigger" ? "المحفز" : s.kind =
 
 // ---------- canvas nodes ----------
 
-const Ctx = createContext<{ trigger: Trigger; edges: Edge[]; onAdd: (id: string, port: Port) => void }>({ trigger: { type: "message", direction: "in", chats: "direct" }, edges: [], onAdd: () => {} });
+/** `readOnly` hides the "+" buttons: the run details page draws the same nodes without editing. */
+export const Ctx = createContext<{ trigger: Trigger; edges: Edge[]; onAdd: (id: string, port: Port) => void; readOnly?: boolean }>({ trigger: { type: "message", direction: "in", chats: "direct" }, edges: [], onAdd: () => {} });
 
 function Plus({ id, port, top }: { id: string; port: Port; top: string }) {
-  const { edges, onAdd } = useContext(Ctx);
-  if (edges.some((e) => e.source === id && (e.sourceHandle ?? "next") === port)) return null;
+  const { edges, onAdd, readOnly } = useContext(Ctx);
+  if (readOnly || edges.some((e) => e.source === id && (e.sourceHandle ?? "next") === port)) return null;
   return (
     <button type="button" className="fn-plus nodrag nopan" style={{ top }} aria-label="أضف الخطوة التالية" title="أضف الخطوة التالية" onClick={(e) => (e.stopPropagation(), onAdd(id, port))}>
       +
@@ -83,8 +89,9 @@ function Plus({ id, port, top }: { id: string; port: Port; top: string }) {
 }
 
 function Card({ kind, icon, title, sub, run, selected, children }: { kind: string; icon: string; title: string; sub?: string; run?: RunMark; selected?: boolean; children?: React.ReactNode }) {
+  const { readOnly } = useContext(Ctx);
   return (
-    <div className={`fnode ${kind}${selected ? " sel" : ""}${run ? (run.ok ? " ran" : " failed") : ""}`} dir="rtl">
+    <div className={`fnode ${kind}${selected ? " sel" : ""}${run ? (run.ok ? " ran" : " failed") : readOnly ? " idle" : ""}`} dir="rtl">
       <span className="fn-icon" aria-hidden="true">{icon}</span>
       <div className="fn-text">
         <strong>{title}</strong>
@@ -132,13 +139,13 @@ function ActionNode({ id, data, selected }: NodeProps<FNode>) {
   );
 }
 
-const nodeTypes = { trigger: TriggerNode, condition: ConditionNode, action: ActionNode };
+export const nodeTypes = { trigger: TriggerNode, condition: ConditionNode, action: ActionNode };
 
 // ---------- conversions ----------
 
-const toNode = (n: GraphNode): FNode => ({ id: n.id, type: n.kind, position: { x: n.x, y: n.y }, data: { spec: n }, deletable: n.kind !== "trigger" });
+export const toNode = (n: GraphNode): FNode => ({ id: n.id, type: n.kind, position: { x: n.x, y: n.y }, data: { spec: n }, deletable: n.kind !== "trigger" });
 const edgeId = (e: GraphEdge) => `${e.from}-${e.port}-${e.to}`;
-const toEdge = (e: GraphEdge): Edge => ({
+export const toEdge = (e: GraphEdge): Edge => ({
   id: edgeId(e), source: e.from, sourceHandle: e.port, target: e.to,
   markerEnd: { type: MarkerType.ArrowClosed },
   label: e.port === "true" ? "نعم" : e.port === "false" ? "لا" : undefined,
@@ -164,6 +171,7 @@ export function FlowBuilder(props: Props) {
   const [f, setF] = useState<EF>(value);
   const [adding, setAdding] = useState<{ from?: string; port?: Port } | null>(null);
   const [localError, setLocalError] = useState("");
+  const flowRef = useRef<ReactFlowInstance<FNode, Edge> | null>(null);
   const set = <K extends keyof EF>(k: K, v: EF[K]) => setF((x) => ({ ...x, [k]: v }));
   const selected = adding ? undefined : nodes.find((n) => n.selected);
 
@@ -189,6 +197,8 @@ export function FlowBuilder(props: Props) {
     setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...toNode(spec), selected: true }]);
     if (adding?.from) setEdges((es) => [...es, toEdge({ from: adding.from!, port: adding.port ?? "next", to: id })]);
     setAdding(null);
+    // bring the new node into view: a long chain would otherwise add it off screen
+    setTimeout(() => flowRef.current?.setCenter(x + 118, y + 34, { zoom: Math.max(flowRef.current.getZoom(), 0.75), duration: 300 }), 60);
   };
 
   const onConnect = useCallback(
@@ -240,6 +250,7 @@ export function FlowBuilder(props: Props) {
         <span className="grow" />
         {orphans.length > 0 && <span className="chip off" title="عقد ما توصل لها من المحفز، فما راح تشتغل">⚠ {orphans.length} عقدة غير موصولة</span>}
         <button type="button" className="btn ghost small" onClick={() => setAdding({})}>+ عقدة</button>
+        <button type="button" className="btn ghost small" title="ينزّل الفلو كملف JSON (بدون قيم الترويسات)" onClick={() => downloadJson(fileSafe(f.name), exportFlows([build()]))}>تصدير</button>
         <button type="button" className="btn solid" onClick={save} disabled={saving}>{saving ? "نحفظ…" : "احفظ الفلو"}</button>
         <button type="button" className="btn ghost" onClick={onCancel}>إغلاق</button>
         {f.id && <button type="button" className="btn ghost danger" onClick={() => onDelete(value)}>احذف</button>}
@@ -259,6 +270,7 @@ export function FlowBuilder(props: Props) {
               isValidConnection={isValid}
               onNodeClick={() => setAdding(null)}
               onPaneClick={() => setAdding(null)}
+              onInit={(i) => (flowRef.current = i)}
               fitView
               fitViewOptions={{ padding: 0.12, minZoom: 0.6, maxZoom: 1 }}
               minZoom={0.3}
@@ -278,7 +290,7 @@ export function FlowBuilder(props: Props) {
           {adding ? (
             <Palette from={adding.from ? nodes.find((n) => n.id === adding.from) : undefined} port={adding.port} onPick={addNode} onClose={() => setAdding(null)} />
           ) : selected ? (
-            <NodeEditor node={selected} f={f} setTrigger={(t) => set("trigger", t)} data={data} patch={patch} onRemove={() => removeNode(selected.id)} />
+            <NodeEditor node={selected} f={f} secret={secret} setTrigger={(t) => set("trigger", t)} data={data} patch={patch} onRemove={() => removeNode(selected.id)} />
           ) : (
             <Settings f={f} set={set} data={data} secret={secret} build={build} setRun={(m) => setNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, run: m.get(n.id) } })))} />
           )}
@@ -314,7 +326,7 @@ function Palette({ from, port, onPick, onClose }: { from?: FNode; port?: Port; o
   );
 }
 
-function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNode; f: EF; setTrigger: (t: Trigger) => void; data: BuilderData; patch: (id: string, fn: (s: Spec) => Spec) => void; onRemove: () => void }) {
+function NodeEditor({ node, f, secret, setTrigger, data, patch, onRemove }: { node: FNode; f: EF; secret: string; setTrigger: (t: Trigger) => void; data: BuilderData; patch: (id: string, fn: (s: Spec) => Spec) => void; onRemove: () => void }) {
   const spec = node.data.spec;
   const title = spec.kind === "trigger" ? "المحفز" : spec.kind === "condition" ? "شرط" : TITLE[spec.action.type];
   return (
@@ -325,6 +337,7 @@ function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNod
       </div>
       {node.data.run && <p className={node.data.run.ok ? "mode-note" : "err"}>{node.data.run.ok ? "✓" : "✗"} {node.data.run.detail}</p>}
       {spec.kind === "trigger" && <TriggerFields t={f.trigger} onChange={setTrigger} />}
+      {spec.kind === "trigger" && f.trigger.type === "webhook" && <HookInfo secret={secret} flowId={f.id} />}
       {spec.kind === "condition" && <ConditionFields spec={spec} data={data} onChange={(s) => patch(node.id, () => s)} />}
       {spec.kind === "action" && (
         <>
@@ -337,15 +350,17 @@ function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNod
 }
 
 function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => void }) {
+  const pick = (v: string): Trigger => (v === "message" ? { type: "message", direction: "in", chats: "direct" } : v === "webhook" ? { type: "webhook" } : { type: "schedule", everyMinutes: 1440, atHour: 8 });
   return (
     <div className="grid2">
       <label>النوع
-        <select value={t.type} onChange={(e) => onChange(e.target.value === "message" ? { type: "message", direction: "in", chats: "direct" } : { type: "schedule", everyMinutes: 1440, atHour: 8 })}>
+        <select value={t.type} onChange={(e) => onChange(pick(e.target.value))}>
           <option value="message">لما توصل رسالة</option>
           <option value="schedule">على جدول زمني</option>
+          <option value="webhook">لما يوصل طلب Webhook من نظام خارجي</option>
         </select>
       </label>
-      {t.type === "message" ? (
+      {t.type === "message" && (
         <>
           <label>الاتجاه
             <select value={t.direction} onChange={(e) => onChange({ ...t, direction: e.target.value as typeof t.direction })}>
@@ -358,7 +373,8 @@ function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => 
             </select>
           </label>
         </>
-      ) : (
+      )}
+      {t.type === "schedule" && (
         <>
           <label>كل كم دقيقة<input type="number" min={5} value={t.everyMinutes} onChange={(e) => onChange({ ...t, everyMinutes: Number(e.target.value) })} /></label>
           <label>أو يومياً بعد الساعة (اختياري)
@@ -367,6 +383,63 @@ function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => 
           <p className="hint">الفلو المجدول ما له محادثة، فاستخدم "إرسال لرقم" والذكاء الاصطناعي وWebhook فقط. الجدول يتحقق وقت المزامنة.</p>
         </>
       )}
+    </div>
+  );
+}
+
+/** Address, secret and a signed example request for a webhook-triggered flow. */
+function HookInfo({ secret, flowId }: { secret: string; flowId?: string }) {
+  const [info, setInfo] = useState<{ url: string; secret: string } | null>(null);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { copied, copy } = useCopy();
+  if (!flowId) return <p className="mode-note">احفظ الفلو أول، وبعدها يطلع لك رابط الـ Webhook وسرّه هنا.</p>;
+  const load = async (op: "hook" | "rotate_hook") => {
+    if (op === "rotate_hook" && !confirm("تغيير السر يوقف أي نظام يستخدم السر الحالي لين تحدّثه. أكمل؟")) return;
+    setBusy(true);
+    setError("");
+    try {
+      setInfo(await call<{ url: string; secret: string }>(secret, "/api/personal/flows", { body: { op, id: flowId } }));
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sample = info
+    ? `URL='${info.url}'
+SECRET='${info.secret}'
+BODY='{"to":"9665XXXXXXXX","text":"طلب جديد","data":{"order":"1234"}}'
+TS=$(date +%s)
+SIG="sha256=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"
+curl -X POST "$URL" -H 'Content-Type: application/json' -H "X-Timestamp: $TS" -H "X-Signature: $SIG" -d "$BODY"`
+    : "";
+  return (
+    <div className="hook-info">
+      {!info ? (
+        <button type="button" className="btn ghost small" disabled={busy} onClick={() => void load("hook")}>{busy ? "…" : "اعرض الرابط والسر"}</button>
+      ) : (
+        <>
+          <label>الرابط</label>
+          <div className="code"><pre dir="ltr">{info.url}</pre><button type="button" className="copy" onClick={() => copy(info.url, "u")}>{copied === "u" ? "تم" : "انسخ"}</button></div>
+          <label>السر</label>
+          <div className="code"><pre dir="ltr">{show ? info.secret : "whsec_" + "•".repeat(20)}</pre><button type="button" className="copy" onClick={() => copy(info.secret, "s")}>{copied === "s" ? "تم" : "انسخ"}</button></div>
+          <div className="row">
+            <button type="button" className="btn ghost small" onClick={() => setShow(!show)}>{show ? "إخفاء السر" : "إظهار السر"}</button>
+            <button type="button" className="btn ghost small danger" disabled={busy} onClick={() => void load("rotate_hook")}>تغيير السر</button>
+          </div>
+          <details>
+            <summary>مثال طلب موقّع (curl)</summary>
+            <div className="code"><pre dir="ltr">{sample}</pre><button type="button" className="copy" onClick={() => copy(sample, "c")}>{copied === "c" ? "تم" : "انسخ"}</button></div>
+          </details>
+        </>
+      )}
+      {error && <p className="err">{error}</p>}
+      <p className="hint">
+        كل طلب لازم يحمل X-Timestamp (ثواني unix) وX-Signature بقيمة sha256=HMAC-SHA256 للنص "الوقت.الجسم" بالسر. الطلب الأقدم من 5 دقائق أو المكرر ينرفض، والحد 60 طلب بالدقيقة.
+        الجسم: to (رقم المحادثة)، text يصير {"{{text}}"}، وحقول data تصير {"{{hook_الاسم}}"}. الفلو يرسل بس لمحادثات موجودة عندك، ولازم يكون مفعّل ومحفوظ بهذا المحفز.
+      </p>
     </div>
   );
 }

@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useRef, useState } from "react";
 import type { Action, Cond, Flow } from "@/lib/flows/types";
 import { call, errMsg, invalidate, useApi, useCopy, useSession } from "../shared";
+import { exportFlows, parseImport } from "@/lib/flows/portable";
 import { FlowBuilder } from "./FlowBuilder";
+import { downloadJson, fileSafe } from "./download";
+import { STATUS_LABEL, fmtMs } from "./RunDetail";
 import { ACTION_LABEL, PRESETS, blankFlow, type ActionType, type EF } from "./presets";
 
 type Account = { id: string; label: string; kind: "personal" | "official" };
-type Log = { t: number; account: string; accountLabel?: string; flow: string; name: string; chat: string; chatName?: string; text?: string; status: string; note?: string; actions: { type: string; ok: boolean; detail?: string }[] };
+type Log = { id?: string; ms?: number; t: number; account: string; accountLabel?: string; flow: string; name: string; chat: string; chatName?: string; text?: string; status: string; note?: string; actions: { type: string; ok: boolean; detail?: string }[] };
 type Data = { flows: Flow[]; paused: boolean; ai: { configured: boolean; claude?: boolean; cheap?: boolean; cheapModel?: string; model: string; dailyCap: number; defaultPrompt: string }; accounts: Account[]; fields: string[]; ops: string[]; log: Log[] };
 
 export function Flows() {
@@ -21,9 +26,11 @@ function App({ secret }: { secret: string }) {
   const api = useApi<Data>("/api/personal/flows", { fresh: 20_000 });
   const data = api.data;
   const [edit, setEdit] = useState<EF | null>(null);
-  const [tab, setTab] = useState<"flows" | "log">("flows");
+  const [tab, setTab] = useState<"flows" | "log">(useSearchParams().get("tab") === "log" ? "log" : "flows");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     invalidate("/api/personal/flows");
@@ -43,6 +50,27 @@ function App({ secret }: { secret: string }) {
       setError(errMsg(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Files are checked here for a clear message and again by the server when each flow is saved.
+  async function importFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setError("");
+    setNotice([]);
+    try {
+      const notes = new Set<string>();
+      const saved: Flow[] = [];
+      for (const file of Array.from(files)) {
+        const { flows, warnings } = parseImport(await file.text());
+        warnings.forEach((w) => notes.add(w));
+        for (const f of flows) saved.push((await call<{ flow: Flow }>(secret, "/api/personal/flows", { method: "PUT", body: { flow: f } })).flow);
+      }
+      await load();
+      setNotice([`انستوردت ${saved.length} ${saved.length === 1 ? "فلو" : "فلوات"}.`, ...notes]);
+      if (saved.length === 1) setEdit(toEF(saved[0]));
+    } catch (e) {
+      setError(errMsg(e));
     }
   }
 
@@ -92,23 +120,36 @@ function App({ secret }: { secret: string }) {
       </div>
 
       {tab === "log" ? (
-        <LogTable log={data.log} />
+        <LogTable log={data.log} flows={data.flows} />
       ) : (
         <div className="flows">
           <section>
             <div className="section-head">
               <h4>فلواتك</h4>
-              <button type="button" className="btn solid small" onClick={() => setEdit(blankFlow())}>+ فلو جديد</button>
+              <div className="row">
+                <input ref={fileInput} type="file" accept=".json,application/json" multiple hidden onChange={(e) => { void importFiles(e.target.files); e.target.value = ""; }} />
+                <button type="button" className="btn ghost small" onClick={() => fileInput.current?.click()}>استيراد</button>
+                {data.flows.length > 0 && <button type="button" className="btn ghost small" onClick={() => downloadJson("whats-mcp-flows", exportFlows(data.flows))}>تصدير الكل</button>}
+                <button type="button" className="btn solid small" onClick={() => setEdit(blankFlow())}>+ فلو جديد</button>
+              </div>
             </div>
+            {error && <div className="banner bad">{error}</div>}
+            {notice.length > 0 && (
+              <div className="note" role="status">
+                <ul className="notice-list">{notice.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                <button type="button" className="btn ghost small" onClick={() => setNotice([])}>تمام</button>
+              </div>
+            )}
             <div className="flowlist">
               {data.flows.map((f) => (
                 <div key={f.id} className="flowrow">
                   <button type="button" className="flowitem" onClick={() => setEdit(toEF(f))}>
                     <strong>{f.name}</strong>
                     <span className="sub">
-                      {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
+                      {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.type === "webhook" ? "Webhook" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
                     </span>
                   </button>
+                  <button type="button" className="btn ghost small" title="تنزيل هذا الفلو كملف JSON" onClick={() => downloadJson(fileSafe(f.name), exportFlows([f]))}>تصدير</button>
                   <label className="sw small" title={f.enabled ? "مفعّل" : "متوقف"}><input type="checkbox" checked={f.enabled} onChange={() => toggle(f)} aria-label={`تفعيل ${f.name}`} /></label>
                 </div>
               ))}
@@ -149,28 +190,53 @@ function Timing() {
   );
 }
 
-function LogTable({ log }: { log: Log[] }) {
-  if (!log.length) return <p className="muted">السجل فاضي. أول ما فلو يشتغل على رسالة تشوفه هنا.</p>;
+function LogTable({ log, flows }: { log: Log[]; flows: Flow[] }) {
+  const [status, setStatus] = useState("");
+  const [flow, setFlow] = useState("");
+  const [q, setQ] = useState("");
+  if (!log.length) return <p className="empty">السجل فاضي. أول ما فلو يشتغل على رسالة تشوفه هنا.</p>;
+  const needle = q.trim().toLowerCase();
+  const rows = log.filter((l) => (!status || l.status === status) && (!flow || l.flow === flow) && (!needle || [l.text, l.chatName, l.chat, l.note, l.name].some((v) => v?.toLowerCase().includes(needle))));
+  const time = (l: Log) => new Date(l.t).toLocaleString("ar", { dateStyle: "short", timeStyle: "short" });
   return (
-    <div className="table-scroll">
-      <table className="logtable">
-        <thead><tr><th>الوقت</th><th>الفلو</th><th>المحادثة</th><th>الرسالة</th><th>النتيجة</th></tr></thead>
-        <tbody>
-          {log.map((l, i) => (
-            <tr key={i}>
-              <td>{new Date(l.t).toLocaleString("ar", { dateStyle: "short", timeStyle: "short" })}</td>
-              <td>{l.name}<br /><span className="muted small">{l.accountLabel}</span></td>
-              <td>{l.chatName || (l.chat ? "+" + l.chat.split("@")[0] : "—")}</td>
-              <td>{l.text}</td>
-              <td>
-                <strong className={l.status === "error" ? "err" : l.status === "ok" ? "ok" : ""}>{({ ok: "تم", draft: "مسودة", dry: "تجربة", error: "خطأ", skipped: "تخطّى" } as Record<string, string>)[l.status] ?? l.status}</strong>
-                {l.note && <div className="muted small">{l.note}</div>}
-                {l.actions.map((a, j) => <div key={j} className={`small ${a.ok ? "muted" : "err"}`}>{a.type === "condition" ? "شرط" : ACTION_LABEL[a.type as ActionType] ?? a.type}: {a.detail}</div>)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="log-filters">
+        <select aria-label="الحالة" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">كل الحالات</option>
+          {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select aria-label="الفلو" value={flow} onChange={(e) => setFlow(e.target.value)}>
+          <option value="">كل الفلوات</option>
+          {flows.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+        <input aria-label="بحث" placeholder="ابحث في الرسالة أو المحادثة" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="muted small">{rows.length} من {log.length}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty">ما فيه نتائج بهذي الفلاتر.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="logtable">
+            <thead><tr><th>الوقت</th><th>الفلو</th><th>المحادثة</th><th>الرسالة</th><th>النتيجة</th><th /></tr></thead>
+            <tbody>
+              {rows.map((l, i) => (
+                <tr key={l.id ?? i}>
+                  <td>{time(l)}{l.ms !== undefined && <div className="muted small">{fmtMs(l.ms)}</div>}</td>
+                  <td>{l.name}<br /><span className="muted small">{l.accountLabel}</span></td>
+                  <td>{l.chatName || (l.chat ? "+" + l.chat.split("@")[0] : "—")}</td>
+                  <td>{l.text}</td>
+                  <td>
+                    <span className={`status ${l.status}`}>{STATUS_LABEL[l.status] ?? l.status}</span>
+                    {l.note && <div className="muted small">{l.note}</div>}
+                    {l.actions.map((a, j) => <div key={j} className={`small ${a.ok ? "muted" : "err"}`}>{a.type === "condition" ? "شرط" : ACTION_LABEL[a.type as ActionType] ?? a.type}: {a.detail}</div>)}
+                  </td>
+                  <td>{l.id ? <Link className="btn ghost small" href={`/personal/flows/run/${l.id}`}>التفاصيل</Link> : <span className="muted small" title="سُجل قبل ميزة التفاصيل">قديم</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

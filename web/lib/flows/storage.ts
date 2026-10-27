@@ -2,7 +2,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { RawKV } from "../wa/auth";
-import { FlowInput, type Draft, type Flow, type LogEntry } from "./types";
+import { FlowInput, type Draft, type Flow, type LogEntry, type Wait } from "./types";
 
 const FLOWS = "meta:flows";
 const PAUSED = "meta:flows-paused";
@@ -84,7 +84,7 @@ export async function readLog(state: RawKV): Promise<LogEntry[]> {
   return parseList<LogEntry>(await state.get(LOG));
 }
 
-export async function pushLog(state: RawKV, entries: LogEntry[], keep = 150) {
+export async function pushLog(state: RawKV, entries: LogEntry[], keep = 300) {
   if (!entries.length) return;
   const old = await readLog(state);
   await state.set(LOG, JSON.stringify([...entries.reverse(), ...old].slice(0, keep)), { ex: 30 * 86400 });
@@ -123,4 +123,35 @@ export async function listDrafts(state: RawKV, status?: Draft["status"]): Promis
   const names = state.keys ? await state.keys(DRAFT + "*") : [];
   const rows = await Promise.all(names.map((n) => getDraft(state, n.slice(DRAFT.length))));
   return rows.filter((d): d is Draft => !!d && (!status || d.status === status)).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+// ---------- runs waiting at a delay node ----------
+
+const WAIT = "flow:wait:";
+const WAIT_TTL = 30 * 86400;
+/** Per number. Each waiting run is one small key, so this keeps a busy chat from filling Redis. */
+export const MAX_WAITS = 300;
+
+export async function saveWait(state: RawKV, w: Omit<Wait, "id" | "createdAt"> & Partial<Pick<Wait, "createdAt">>): Promise<Wait> {
+  const wait: Wait = { id: randomBytes(6).toString("hex"), createdAt: Date.now(), ...w };
+  await state.set(WAIT + wait.id, JSON.stringify(wait), { ex: WAIT_TTL });
+  return wait;
+}
+
+export async function listWaits(state: RawKV): Promise<Wait[]> {
+  const names = state.keys ? await state.keys(WAIT + "*") : [];
+  const rows = await Promise.all(
+    names.map(async (n) => {
+      try {
+        return JSON.parse((await state.get(n)) ?? "null") as Wait | null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return rows.filter((w): w is Wait => !!w && !!w.id).sort((a, b) => a.resumeAt - b.resumeAt);
+}
+
+export async function deleteWait(state: RawKV, id: string) {
+  await state.del(WAIT + id);
 }
