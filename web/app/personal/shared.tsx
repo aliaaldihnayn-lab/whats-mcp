@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Mark } from "@/components/Mark";
 
 const KEY = "whats-mcp-secret";
 
@@ -52,6 +53,8 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+  const [restoring, setRestoring] = useState(true);
 
   const load = useCallback(async (s: string) => {
     setBusy(true);
@@ -76,31 +79,57 @@ export function SecretGate({ children }: { children: ReactNode | ((secret: strin
     const s = readSecret();
     if (s) {
       setInput(s);
-      void load(s);
-    }
+      void load(s).finally(() => setRestoring(false));
+    } else setRestoring(false);
   }, [load]);
 
   if (status && secret) {
     const reload = () => load(secret);
     return <SessionCtx.Provider value={{ secret, status, reload }}>{typeof children === "function" ? children(secret, status, reload) : children}</SessionCtx.Provider>;
   }
+  // a secret kept from earlier in this tab: show a quiet loader instead of flashing the form
+  if (restoring) return <div className="gate" aria-busy="true"><div className="gate-card"><div className="skel" style={{ height: 160 }} /></div></div>;
   return (
-    <form
-      className="field panel"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void load(input.trim());
-      }}
-    >
-      <label htmlFor="secret">كلمة السر (MCP_SECRET)</label>
-      <div className="row">
-        <input id="secret" type="password" dir="ltr" autoComplete="off" value={input} onChange={(e) => setInput(e.target.value)} required minLength={24} />
-        <button className="btn solid" type="submit" disabled={busy}>
-          {busy ? "…" : "افتح"}
+    <div className="gate">
+      <form
+        className="gate-card"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void load(input.trim());
+        }}
+      >
+        <a className="mark" href="/"><Mark /> واتساب MCP</a>
+        <div>
+          <h1>لوحة التحكم</h1>
+          <p className="muted">ادخل بكلمة السر <code>MCP_SECRET</code> اللي حطيتها في إعدادات فيرسل. تنحفظ في هذا التبويب بس، وتنمسح لما تقفله.</p>
+        </div>
+        <label htmlFor="secret">كلمة السر</label>
+        <div className="gate-input">
+          <input
+            id="secret"
+            type={show ? "text" : "password"}
+            dir="ltr"
+            autoComplete="current-password"
+            autoFocus
+            value={input}
+            onChange={(e) => (setInput(e.target.value), setError(""))}
+            required
+            minLength={24}
+            aria-invalid={!!error}
+            aria-describedby={error ? "secret-error" : undefined}
+          />
+          <button type="button" className="gate-eye" onClick={() => setShow(!show)} aria-label={show ? "إخفاء كلمة السر" : "إظهار كلمة السر"} aria-pressed={show}>
+            {show ? "إخفاء" : "إظهار"}
+          </button>
+        </div>
+        {error && <p id="secret-error" className="banner bad" role="alert">{error === "Wrong or missing MCP_SECRET." ? "كلمة السر غلط. تأكد إنها نفس قيمة MCP_SECRET في فيرسل." : error}</p>}
+        <button className="btn solid" type="submit" disabled={busy || input.trim().length < 24}>
+          {busy ? <span className="spinner" aria-hidden="true" /> : null}
+          {busy ? "نتحقق…" : "ادخل"}
         </button>
-      </div>
-      {error && <p className="err">{error}</p>}
-    </form>
+        <p className="hint">ما عندك كلمة سر؟ <a href="/guide">دليل الإعداد</a> يشرح كيف تسويها.</p>
+      </form>
+    </div>
   );
 }
 

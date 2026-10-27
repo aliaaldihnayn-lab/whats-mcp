@@ -201,10 +201,13 @@ function App({ secret, status }: { secret: string; status: Status }) {
         <section className="thread" aria-label="المحادثة">
           {!open ? (
             <div className="empty">
-              <p>اختر محادثة من القائمة، أو اكتب رقماً لبدء محادثة جديدة.</p>
-              <form onSubmit={send} className="composer" style={{ width: "min(420px, 100%)", margin: "12px auto 0", border: 0 }}>
-                <input dir="ltr" placeholder="966501234567" value={newTo} onChange={(e) => setNewTo(e.target.value)} />
-                <textarea placeholder="الرسالة" value={text} onChange={(e) => setText(e.target.value)} />
+              <p>اختر محادثة من القائمة، أو ابدأ محادثة جديدة.</p>
+              <form onSubmit={send} className="newchat">
+                <h4>محادثة جديدة</h4>
+                <label className="muted small" htmlFor="newchat-to">الرقم مع رمز الدولة</label>
+                <input id="newchat-to" dir="ltr" inputMode="tel" placeholder="966501234567" value={newTo} onChange={(e) => setNewTo(e.target.value)} />
+                <label className="muted small" htmlFor="newchat-text">الرسالة</label>
+                <textarea id="newchat-text" placeholder="اكتب رسالتك…" value={text} onChange={(e) => setText(e.target.value)} />
                 <button className="btn solid" disabled={!newTo || !text.trim() || busy === "send"}>{busy === "send" ? "يرسل…" : "أرسل"}</button>
               </form>
               {kind === "official" && <p className="hint">الرقم الرسمي يرسل نص حر فقط خلال 24 ساعة من آخر رسالة للعميل.</p>}
