@@ -1170,3 +1170,8 @@ td.vars { display: flex; flex-wrap: wrap; gap: 4px; }
 .builder-bar, .builder-panel { box-shadow: none; }
 .builder-bar { padding: 10px 14px; }
 .palette button { box-shadow: inset 0 0 0 1px var(--line); background: var(--paper); }
+.app .phone-form { display: grid; gap: 8px; margin: 0 0 14px; }
+.app .phone-form label { font-weight: 500; font-size: var(--fs-md); }
+
+/* phones: one column, whatever the desktop rules above say (the sidebar is a fixed bottom bar there) */
+@media (max-width: 760px) { .app, .app[data-nav="mini"] { grid-template-columns: minmax(0, 1fr); } }
