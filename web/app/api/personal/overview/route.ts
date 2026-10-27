@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     const flows = await listFlows(a.base);
     const ai = aiStatus();
     return Response.json({
-      ...(await buildOverview(accounts)),
+      ...(await buildOverview(accounts, Date.now(), new Map(flows.map((f) => [f.id, f.name])))),
       flows: { total: flows.length, enabled: flows.filter((f) => f.enabled).length, paused: await isPaused(a.base) },
       ai: { configured: ai.claude || ai.cheap, dailyCap: Number(process.env.AI_MAX_PER_DAY) || 300 },
     });

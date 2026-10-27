@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryKV, Store, type StoredMessage } from "./store";
 import { MemoryRawKV } from "./wa/auth";
-import { runFlows, testFlow, norm, render, type Channel, type EngineDeps } from "./flows/engine";
+import { runFlows, runWebhookFlow, testFlow, norm, render, type Channel, type EngineDeps } from "./flows/engine";
 import { FlowInput, Graph, type Flow, type FlowDraft } from "./flows/types";
 import { flowToGraph, unreachable } from "./flows/graph";
-import { listDrafts, readLog, saveFlow, listFlows, flowsFor, setPaused, isPaused } from "./flows/storage";
+import { listDrafts, readLog, saveFlow, listFlows, flowsFor, setPaused, isPaused, listWaits, saveWait, MAX_WAITS } from "./flows/storage";
 import { GUARD, SKIP, type AiClient } from "./flows/ai";
 import { literalCheck } from "./net";
 
@@ -577,4 +577,165 @@ test("replay: a scheduled flow runs without a message, a chat-only action report
   assert.equal(r.actions[1].ok, false);
   assert.match(r.actions[1].detail ?? "", /needs a conversation/);
   assert.equal(sent.length, 0);
+});
+
+// ---------- delay node ----------
+
+const MIN = 60_000;
+type DelayOpts = { minutes?: number; cancelOnReply?: boolean; cooldownSeconds?: number; withAi?: boolean };
+/** trigger -> (ai) -> delay -> reply */
+function delayFlow(o: DelayOpts = {}) {
+  const nodes: FlowDraft["graph"] extends infer G ? any : never = [
+    { id: "t", kind: "trigger", x: 0, y: 0 },
+    ...(o.withAi ? [{ id: "a0", kind: "action", x: 300, y: 0, action: { type: "ai", prompt: "اكتب", context: 5, maxTokens: 100, scope: "chat", hours: 24 } }] : []),
+    { id: "w", kind: "action", x: 600, y: 0, action: { type: "delay", minutes: o.minutes ?? 30, cancelOnReply: o.cancelOnReply ?? false } },
+    { id: "a1", kind: "action", x: 900, y: 0, action: { type: "reply", text: o.withAi ? "{{ai}}" : "تذكير: هل ما زلت مهتماً؟", quote: false } },
+  ];
+  const ids = nodes.map((n: { id: string }) => n.id);
+  const edges = ids.slice(0, -1).map((id: string, i: number) => ({ from: id, port: "next", to: ids[i + 1] }));
+  return mkFlow({ actions: [], cooldownSeconds: o.cooldownSeconds ?? 0, graph: { nodes, edges } });
+}
+
+test("delay: the run pauses, nothing is sent, and the next sync after the time continues it", async () => {
+  const { deps, sent, state } = setup([delayFlow({ minutes: 30 })]);
+  const m = msg();
+  await deps.store.saveMessage(m);
+  const [first] = await runFlows(deps, [m], NOW);
+  assert.equal(sent.length, 0, "nothing goes out before the wait is over");
+  assert.equal(first.actions.at(-1)?.type, "delay");
+  assert.match(first.actions.at(-1)?.detail ?? "", /continues after 30 min/);
+  assert.equal((await listWaits(state)).length, 1);
+
+  await runFlows(deps, [], NOW + 29 * MIN);
+  assert.equal(sent.length, 0, "not due yet");
+  assert.equal((await listWaits(state)).length, 1);
+
+  const logs = await runFlows(deps, [], NOW + 31 * MIN);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, "تذكير: هل ما زلت مهتماً؟");
+  assert.equal(sent[0].chat, CHAT);
+  assert.equal(logs[0].resumed, first.id, "the continuation points back at the run that paused");
+  assert.equal((await listWaits(state)).length, 0, "a continued run is not kept");
+  await runFlows(deps, [], NOW + 40 * MIN);
+  assert.equal(sent.length, 1, "and never continues twice");
+});
+
+test("delay: what an earlier step produced ({{ai}}) is still there after the wait", async () => {
+  const ai: AiClient = async () => "عرض خاص لك";
+  const { deps, sent } = setup([delayFlow({ withAi: true })], { ai });
+  const m = msg();
+  await deps.store.saveMessage(m);
+  await runFlows(deps, [m], NOW);
+  await runFlows(deps, [], NOW + 31 * MIN);
+  assert.deepEqual(sent.map((x) => x.text), ["عرض خاص لك"]);
+});
+
+test("delay: cancel-on-reply drops the continuation when they wrote again", async () => {
+  const { deps, sent } = setup([delayFlow({ cancelOnReply: true })]);
+  const m = msg();
+  await deps.store.saveMessage(m);
+  await runFlows(deps, [m], NOW);
+  await deps.store.saveMessage(msg({ timestamp: Math.floor((NOW + 10 * MIN) / 1000) })); // they answered while we waited
+  const logs = await runFlows(deps, [], NOW + 31 * MIN);
+  assert.equal(sent.length, 0);
+  assert.equal(logs[0].status, "skipped");
+  assert.match(logs[0].note ?? "", /cancelled/);
+});
+
+test("delay: a flow that is off, changed or far overdue drops the wait with a log line, never a stale send", async () => {
+  const flow = delayFlow();
+  const a = setup([flow]);
+  const m = msg();
+  await a.deps.store.saveMessage(m);
+  await runFlows(a.deps, [m], NOW);
+  const off = await runFlows({ ...a.deps, flows: [flow].filter(() => false).concat([mkFlow({ id: "other", actions: [{ type: "tag", tag: "x" }] })]) }, [], NOW + 31 * MIN);
+  assert.match(off[0].note ?? "", /off or was changed/);
+  assert.equal(a.sent.length, 0);
+
+  const b = setup([flow]);
+  await b.deps.store.saveMessage(m);
+  await runFlows(b.deps, [m], NOW);
+  const late = await runFlows(b.deps, [], NOW + 30 * MIN + 4 * 86400_000);
+  assert.match(late[0].note ?? "", /too late/);
+  assert.equal(b.sent.length, 0);
+});
+
+test("delay: the per-chat cooldown does not block the flow's own continuation, the hourly cap still does", async () => {
+  const a = setup([delayFlow({ minutes: 1, cooldownSeconds: 3600 })]);
+  const m = msg();
+  await a.deps.store.saveMessage(m);
+  await runFlows(a.deps, [m], NOW);
+  await runFlows(a.deps, [], NOW + 2 * MIN);
+  assert.equal(a.sent.length, 1, "a one hour cooldown must not stop a one minute delay");
+
+  const capped = setup([{ ...delayFlow({ minutes: 1 }), maxPerHour: 1 }]);
+  const m1 = msg({ id: "c1" });
+  const m2 = msg({ id: "c2", waId: "966500000002@s.whatsapp.net" });
+  for (const m of [m1, m2]) await capped.deps.store.saveMessage(m);
+  await runFlows(capped.deps, [m1, m2], NOW);
+  const logs = await runFlows(capped.deps, [], NOW + 2 * MIN);
+  assert.equal(capped.sent.length, 1);
+  assert.ok(logs.some((l) => l.status === "skipped" && /hourly limit/.test(l.note ?? "")));
+});
+
+test("delay: dry mode and tests never wait, they show the steps after the delay", async () => {
+  const flow = delayFlow();
+  const { deps, sent, state } = setup([]);
+  const r = await testFlow({ ...flow, mode: "dry" }, { text: "هلا" }, deps, NOW);
+  assert.equal(r.actions[0].type, "delay");
+  assert.match(r.actions[0].detail ?? "", /would wait 30 min, then continue/);
+  assert.match(r.actions[1].detail ?? "", /would send/);
+  assert.equal((await listWaits(state)).length, 0);
+  assert.equal(sent.length, 0);
+});
+
+test("delay: waiting runs are capped per number, and loops or linear delays cannot be saved", async () => {
+  const { deps, state } = setup([delayFlow()]);
+  for (let i = 0; i < MAX_WAITS; i++) await saveWait(state, { flow: "f1", node: "w", chat: CHAT, resumeAt: NOW + 1e9, cancelOnReply: false, vars: {} });
+  const m = msg();
+  await deps.store.saveMessage(m);
+  const [log] = await runFlows(deps, [m], NOW);
+  assert.equal(log.status, "error");
+  assert.match(log.actions.at(-1)?.detail ?? "", /already waiting/);
+
+  const t = { id: "t", kind: "trigger" as const, x: 0, y: 0 };
+  const a = { id: "a1", kind: "action" as const, x: 0, y: 0, action: { type: "mark_read" as const } };
+  const b = { id: "a2", kind: "action" as const, x: 0, y: 0, action: { type: "mark_read" as const } };
+  assert.equal(Graph.safeParse({ nodes: [t, a, b], edges: [{ from: "t", port: "next", to: "a1" }, { from: "a1", port: "next", to: "a2" }, { from: "a2", port: "next", to: "a1" }] }).success, false, "a loop");
+  assert.throws(() => FlowInput.parse({ name: "x", actions: [{ type: "delay", minutes: 5 }] }), /node editor/);
+});
+
+// ---------- webhook trigger ----------
+
+const hookFlow = (over: Partial<FlowDraft> = {}) => mkFlow({ trigger: { type: "webhook" }, actions: [{ type: "reply", text: "طلبك {{hook_order}} جاهز يا {{chat_name}}", quote: false }], ...over });
+
+test("webhook: runs the flow on the chat it names, with {{hook_*}} fields, and logs the run", async () => {
+  const { deps, sent, store, state } = setup([]);
+  await store.saveMessage(msg()); // the customer wrote before, so the chat exists
+  await store.setName(CHAT, "سارة");
+  const entry = await runWebhookFlow(hookFlow(), { to: "966500000001", text: "طلب جديد", data: { order: "A-17" } }, deps, NOW);
+  assert.deepEqual(sent.map((m) => [m.chat, m.text]), [[CHAT, "طلبك A-17 جاهز يا سارة"]]);
+  assert.equal(entry?.status, "ok");
+  assert.equal(entry?.trigger?.type, "webhook");
+  assert.equal((await readLog(state))[0].id, entry?.id);
+});
+
+test("webhook: never messages a chat this number has no history with", async () => {
+  const { deps, sent } = setup([]);
+  const entry = await runWebhookFlow(hookFlow({ actions: [{ type: "send", to: "966511112222", text: "عرض" }] }), { data: {} }, deps, NOW);
+  assert.equal(sent.length, 0);
+  assert.equal(entry?.status, "error");
+  assert.match(entry?.actions[0].detail ?? "", /only message chats that already exist/);
+});
+
+test("webhook: approve mode makes drafts, conditions can route on hook fields, paused flows refuse", async () => {
+  const { deps, sent, store, state } = setup([]);
+  await store.saveMessage(msg());
+  const draftEntry = await runWebhookFlow(hookFlow({ mode: "approve" }), { to: "966500000001", data: { order: "1" } }, deps, NOW);
+  assert.equal(draftEntry?.status, "draft");
+  assert.equal((await listDrafts(state, "pending")).length, 1);
+  assert.equal(sent.length, 0);
+  const gated = hookFlow({ conditions: [{ field: "text", op: "contains", value: "عاجل" }] });
+  assert.equal(await runWebhookFlow(gated, { to: "966500000001", text: "عادي", data: {} }, deps, NOW), null, "no action, no log");
+  await assert.rejects(() => runWebhookFlow(hookFlow(), { data: {} }, { ...deps, paused: true }, NOW), /paused/);
 });

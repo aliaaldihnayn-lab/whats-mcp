@@ -62,6 +62,13 @@ export const Action = z.discriminatedUnion("type", [
     method: z.enum(["POST", "GET"]).default("POST"),
     headers: z.record(z.string().max(80), z.string().max(500)).default({}),
   }),
+  z.object({
+    type: z.literal("delay"),
+    /** graph flows only: the steps after this one run once this long has passed (checked at each sync) */
+    minutes: z.number().int().min(1).max(20160),
+    /** skip the rest if the other person wrote again while we waited */
+    cancelOnReply: z.boolean().default(false),
+  }),
   z.object({ type: z.literal("stop") }),
 ]);
 export type Action = z.infer<typeof Action>;
@@ -86,6 +93,8 @@ export const Trigger = z.discriminatedUnion("type", [
     everyMinutes: z.number().int().min(5).max(10080).default(1440),
     atHour: z.number().int().min(0).max(23).optional(),
   }),
+  /** an outside system calls /api/hooks/<flow id> with a signed request; the secret lives outside the flow */
+  z.object({ type: z.literal("webhook") }),
 ]);
 export type Trigger = z.infer<typeof Trigger>;
 
@@ -129,6 +138,19 @@ export const Graph = z
       if (seen.has(key)) bad("the same wire appears twice");
       seen.add(key);
     }
+    // A loop would run its steps again and again (with a delay in it, forever, one lap per sync).
+    const next = new Map<string, string[]>();
+    for (const e of g.edges) if (kind.has(e.from) && kind.has(e.to)) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+    const mark = new Map<string, 1 | 2>();
+    const loops = (id: string): boolean => {
+      if (mark.get(id) === 2) return false;
+      if (mark.get(id) === 1) return true;
+      mark.set(id, 1);
+      const hit = (next.get(id) ?? []).some(loops);
+      mark.set(id, 2);
+      return hit;
+    };
+    if (g.nodes.some((n) => loops(n.id))) bad("the flow loops back on itself");
   });
 export type Graph = z.infer<typeof Graph>;
 
@@ -154,7 +176,8 @@ export const FlowInput = z
     stopOnMatch: z.boolean().default(false),
     tz: z.string().max(60).refine(validTz, "unknown time zone").default("Asia/Riyadh"),
   })
-  .refine((f) => f.graph || f.actions.length > 0, { path: ["actions"], message: "needs at least one action" });
+  .refine((f) => f.graph || f.actions.length > 0, { path: ["actions"], message: "needs at least one action" })
+  .refine((f) => !f.actions.some((a) => a.type === "delay"), { path: ["actions"], message: "a delay needs the node editor (open the flow in the builder and save it)" });
 export type FlowInput = z.infer<typeof FlowInput>;
 /** What the dashboard sends: defaults not filled in yet. */
 export type FlowDraft = z.input<typeof FlowInput>;
@@ -195,6 +218,8 @@ export type LogStep = {
 export type LogEntry = {
   /** run id, for the details page; entries from before run details have none */
   id?: string;
+  /** a run that continues one which paused at a delay: the id of the run it continues */
+  resumed?: string;
   t: number;
   /** total time from the first step to the last */
   ms?: number;
@@ -211,4 +236,22 @@ export type LogEntry = {
   status: "ok" | "draft" | "dry" | "error" | "skipped";
   note?: string;
   actions: LogStep[];
+};
+
+/** A run paused at a delay node, waiting to continue. */
+export type Wait = {
+  id: string;
+  flow: string;
+  /** the delay node; the run continues with what follows it */
+  node: string;
+  chat: string;
+  /** the message that started the run (absent for scheduled flows) */
+  msg?: string;
+  createdAt: number;
+  resumeAt: number;
+  cancelOnReply: boolean;
+  /** the run this one continues, for the details page */
+  runId?: string;
+  /** what earlier steps produced and later steps may use ({{ai}}) */
+  vars: { ai?: string };
 };

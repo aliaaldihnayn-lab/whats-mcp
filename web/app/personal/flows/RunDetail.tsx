@@ -122,7 +122,7 @@ export function RunDetail({ id }: { id: string }) {
           <p className="muted">
             {new Date(run.t).toLocaleString("ar", { dateStyle: "medium", timeStyle: "medium" })}
             {run.accountLabel ? ` · ${run.accountLabel}` : ""}
-            {run.chat ? ` · ${run.chatName || phone}` : " · تشغيل مجدول"}
+            {run.chat ? ` · ${run.chatName || phone}` : run.trigger?.type === "webhook" ? " · طلب Webhook" : " · تشغيل مجدول"}
           </p>
         </div>
         <div className="run-meta">
@@ -160,6 +160,7 @@ export function RunDetail({ id }: { id: string }) {
         </section>
       )}
 
+      {run.resumed && <div className="note"><p>هذا تشغيل متابعة: التشغيل الأصلي وقف عند عقدة انتظار وكمّل هنا. <Link href={`/personal/flows/run/${run.resumed}`}>افتح التشغيل الأصلي</Link></p></div>}
       {run.note && <div className={`banner ${run.status === "error" ? "bad" : "ok"}`}>{run.note}</div>}
       {flow?.changed && <div className="note"><p>الفلو تغيّر بعد هذا التشغيل، فالرسم قد لا يطابق اللي اشتغل فعلاً. الخطوات تحت هي المسجلة وقت التشغيل.</p></div>}
       {!flow && <div className="note"><p>هذا الفلو انحذف، فما أقدر أرسمه. الخطوات تحت هي المسجلة وقت التشغيل.</p></div>}
@@ -183,7 +184,7 @@ export function RunDetail({ id }: { id: string }) {
           </section>
         )}
         <section className="card run-msg">
-          <h3>{trig ? "الرسالة اللي شغّلت الفلو" : "المحفز"}</h3>
+          <h3>{trig?.type === "webhook" ? "نص طلب الـ Webhook" : trig ? "الرسالة اللي شغّلت الفلو" : "المحفز"}</h3>
           {trig ? (
             <>
               <p className="run-who">
