@@ -99,6 +99,16 @@ export default function Guide() {
               <p>أرخص بكثير للردود. للمساعد بالأدوات اختر نموذج يدعم function calling.</p>
             </div>
           </div>
+          <h3>الطريقة الأسهل: مزود رخيص مثل DeepSeek</h3>
+          <ol className="steps">
+            <li><strong>أنشئ مفتاح API</strong><p>من منصة DeepSeek (platform.deepseek.com). لا تشاركه مع أحد ولا ترسله في أي محادثة.</p></li>
+            <li><strong>أضف المتغيرات في Vercel</strong><p>مشروعك ← Settings ← Environment Variables، وأضف: <code>AI_COMPAT_URL</code> = <code>https://api.deepseek.com/v1</code>، و<code>AI_COMPAT_KEY</code> = مفتاحك، و<code>AI_COMPAT_MODEL</code> = اسم الموديل من لوحة DeepSeek (فئة Flash أرخص).</p></li>
+            <li><strong>Redeploy</strong><p>من تبويب Deployments ← النقاط الثلاث على آخر نشر ← Redeploy.</p></li>
+            <li><strong>تأكد</strong><p>افتح <code>/personal/flows</code> وتأكد إن شارة الذكاء صارت «جاهز». جرّب فلو بسيط قبل ما تفعّله تلقائياً.</p></li>
+          </ol>
+          <h3>أو Claude</h3>
+          <p>أضف <code>ANTHROPIC_API_KEY</code> من console.anthropic.com ثم Redeploy. هذا الأدق للمساعد اللي ينفذ مهام بالموصلات.</p>
+          <h3>عناوين المزودين</h3>
           <div className="envs">
             {PROVIDERS.map(([n, u]) => (
               <Fragment key={n}>

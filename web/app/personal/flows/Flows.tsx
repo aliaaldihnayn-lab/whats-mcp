@@ -82,7 +82,8 @@ function App({ secret }: { secret: string }) {
   return (
     <>
       <div className="chips">
-        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ Claude جاهز (${data.ai.model}، حد يومي ${data.ai.dailyCap})` : "○ Claude غير مفعّل: أضف ANTHROPIC_API_KEY في فيرسل"}</span>
+        {!data.ai.configured && <a className="chip opt" href="/guide#s3">خطوات التفعيل</a>}
+        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ Claude جاهز (${data.ai.model}، حد يومي ${data.ai.dailyCap})` : "○ الذكاء غير مفعّل: أضف مفتاح (ANTHROPIC_API_KEY أو AI_COMPAT_*) في فيرسل"}</span>
         <span className={`chip ${data.paused ? "off" : "on"}`}>{data.paused ? "✗ كل الفلوات موقوفة" : "✓ الفلوات تشتغل"}</span>
         <button type="button" className="btn ghost small" onClick={() => pause(!data.paused)}>{data.paused ? "شغّل الكل" : "أوقف الكل فوراً"}</button>
       </div>
