@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Overview as Data } from "@/lib/overview";
-import { useApi, when } from "../shared";
+import { call, errMsg, useApi, useSession, when } from "../shared";
 
 type Resp = Data & { flows: { total: number; enabled: number; paused: boolean }; ai: { configured: boolean; dailyCap: number } };
 
@@ -13,9 +13,38 @@ const ago = (ms: number) => {
   return m < 1 ? "الحين" : m < 60 ? `قبل ${m} دقيقة` : m < 48 * 60 ? `قبل ${Math.round(m / 60)} ساعة` : `قبل ${Math.round(m / 1440)} يوم`;
 };
 
+/** "in 25 min" while waiting, or a plain note once the time has passed and the next sync will pick it up. */
+const until = (ms: number) => {
+  const m = Math.round((ms - Date.now()) / 60_000);
+  if (m <= 0) return "حان وقتها، تكمل مع المزامنة الجاية";
+  return m < 60 ? `تكمل بعد ${m} دقيقة` : m < 48 * 60 ? `تكمل بعد ${Math.round(m / 60)} ساعة` : `تكمل بعد ${Math.round(m / 1440)} يوم`;
+};
+
 export function Overview() {
   const api = useApi<Resp>("/api/personal/overview", { fresh: 20_000, poll: 30_000 });
+  const { secret } = useSession();
+  const [cancelling, setCancelling] = useState("");
+  const [cancelError, setCancelError] = useState("");
   const d = api.data;
+
+  async function cancelWait(w: Data["waits"][number]) {
+    if (!confirm(`إلغاء انتظار "${w.flowName}"؟ الخطوات اللي بعده ما راح تشتغل لهذي المحادثة.`)) return;
+    setCancelling(w.id);
+    setCancelError("");
+    try {
+      await call(secret, "/api/personal/flows", { body: { op: "cancel_wait", account: w.account, id: w.id } });
+      // drop it from what is on screen at once; the reload brings the next one into the list of five
+      api.set((prev) => {
+        const x = prev!; // the button only exists once the data is on screen
+        return { ...x, waits: x.waits.filter((y) => y.id !== w.id), totals: { ...x.totals, waiting: Math.max(0, x.totals.waiting - 1) }, accounts: x.accounts.map((a) => (a.id === w.account ? { ...a, waiting: Math.max(0, a.waiting - 1) } : a)) };
+      });
+      await api.reload();
+    } catch (e) {
+      setCancelError(errMsg(e));
+    } finally {
+      setCancelling("");
+    }
+  }
 
   if (!d) {
     return (
@@ -59,6 +88,7 @@ export function Overview() {
       <div className="kpis">
         <Kpi label="رسائل واردة" value={t.messagesIn} sub={`صادرة ${t.messagesOut}`} />
         <Kpi label="محادثات نشطة" value={t.activeChats} sub={`${d.accounts.length} ${d.accounts.length === 1 ? "رقم" : "أرقام"}`} />
+        <Kpi label="تشغيلات تنتظر" value={t.waiting} sub={t.waiting ? "عند عقدة انتظار" : "ما فيه شي معلّق"} />
         <Kpi label="مسودات تنتظرك" value={t.drafts} tone={t.drafts ? "warn" : undefined} href="/personal/inbox" sub={t.drafts ? "راجعها في الوارد" : "ما فيه شي معلّق"} />
         <Kpi label="تشغيلات الفلوات" value={runs} href="/personal/flows?tab=log" sub={`تم ${t.runs.ok} · مسودة ${t.runs.draft}${t.runs.dry ? ` · تجربة ${t.runs.dry}` : ""}${t.runs.skipped ? ` · تخطّى ${t.runs.skipped}` : ""}`} />
         <Kpi label="أخطاء الفلوات" value={t.runs.error} tone={t.runs.error ? "bad" : undefined} href="/personal/flows?tab=log" sub={t.runs.error ? "افتح السجل للتفاصيل" : "كل شي سليم"} />
@@ -116,11 +146,30 @@ export function Overview() {
         </section>
       </div>
 
+      {(t.waiting > 0 || cancelError) && (
+        <section className="card">
+          <div className="section-head"><h3>تشغيلات تنتظر عند عقدة انتظار</h3>{t.waiting > 5 && <span className="tag">أقرب 5 من {t.waiting}</span>}</div>
+          {cancelError && <div className="banner bad">{cancelError}</div>}
+          <ul className="list">
+            {d.waits.map((w) => (
+              <li key={w.id}>
+                <div className="grow">
+                  <strong>{w.flowName}</strong>
+                  <span className="sub">{w.chat ? w.chatName || "+" + w.chat.split("@")[0].split(":")[0] : "فلو مجدول"} · {w.accountLabel}{w.cancelOnReply ? " · يلغى لو ردّ" : ""}</span>
+                </div>
+                <span className="tag">{until(w.resumeAt)}</span>
+                <button type="button" className="btn ghost small danger" disabled={cancelling === w.id} onClick={() => void cancelWait(w)}>{cancelling === w.id ? "…" : "ألغِ"}</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="card">
         <h3>الأرقام</h3>
         <div className="table-scroll">
           <table className="logtable">
-            <thead><tr><th>الرقم</th><th>الحالة</th><th>آخر مزامنة</th><th>محادثات نشطة</th><th>واردة / صادرة</th><th>مسودات</th><th>أخطاء</th></tr></thead>
+            <thead><tr><th>الرقم</th><th>الحالة</th><th>آخر مزامنة</th><th>محادثات نشطة</th><th>واردة / صادرة</th><th>مسودات</th><th>تنتظر</th><th>أخطاء</th></tr></thead>
             <tbody>
               {d.accounts.map((a) => (
                 <tr key={a.id}>
@@ -130,6 +179,7 @@ export function Overview() {
                   <td>{a.activeChats}</td>
                   <td>{a.messagesIn} / {a.messagesOut}</td>
                   <td>{a.drafts}</td>
+                  <td>{a.waiting}</td>
                   <td className={a.runs.error ? "err" : ""}>{a.runs.error}</td>
                 </tr>
               ))}
