@@ -223,6 +223,9 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
               <Svg d={ICON.bell} />
               {pending > 0 && <b>{pending > 9 ? "9+" : pending}</b>}
             </Link>
+            <button type="button" className="top-logout" onClick={forgetSecret} aria-label="تسجيل الخروج" title="تسجيل الخروج">
+              <Svg d={ICON.logout} />
+            </button>
             <Link className="avatar" href="/personal" title={whoName || "الأرقام والمفاتيح"} aria-label={whoName ? `الحساب: ${whoName}` : "الأرقام والمفاتيح"}>
               {whoName ? [...whoName][0] : <Svg d={ICON.numbers} />}
             </Link>

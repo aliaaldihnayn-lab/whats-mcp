@@ -194,19 +194,19 @@ export function Overview() {
       <section className="card">
         <h3>الأرقام</h3>
         <div className="table-scroll">
-          <table className="logtable">
+          <table className="logtable stack-table">
             <thead><tr><th>الرقم</th><th>الحالة</th><th>آخر مزامنة</th><th>محادثات نشطة</th><th>واردة / صادرة</th><th>مسودات</th><th>تنتظر</th><th>أخطاء</th></tr></thead>
             <tbody>
               {d.accounts.map((a) => (
                 <tr key={a.id}>
-                  <td><strong>{a.label}</strong></td>
-                  <td>{a.kind === "official" ? <span className="chip on">رسمي</span> : a.paired ? <span className="chip on">مربوط</span> : <span className="chip off">غير مربوط</span>}</td>
-                  <td>{a.kind === "official" ? "لحظي" : when(a.lastSync)}</td>
-                  <td>{a.activeChats}</td>
-                  <td>{a.messagesIn} / {a.messagesOut}</td>
-                  <td>{a.drafts}</td>
-                  <td>{a.waiting}</td>
-                  <td className={a.runs.error ? "err" : ""}>{a.runs.error}</td>
+                  <td data-label="الرقم"><strong>{a.label}</strong></td>
+                  <td data-label="الحالة">{a.kind === "official" ? <span className="chip on">رسمي</span> : a.paired ? <span className="chip on">مربوط</span> : <span className="chip off">غير مربوط</span>}</td>
+                  <td data-label="آخر مزامنة">{a.kind === "official" ? "لحظي" : when(a.lastSync)}</td>
+                  <td data-label="محادثات نشطة">{a.activeChats}</td>
+                  <td data-label="واردة / صادرة">{a.messagesIn} / {a.messagesOut}</td>
+                  <td data-label="مسودات">{a.drafts}</td>
+                  <td data-label="تنتظر">{a.waiting}</td>
+                  <td data-label="أخطاء" className={a.runs.error ? "err" : ""}>{a.runs.error}</td>
                 </tr>
               ))}
             </tbody>
