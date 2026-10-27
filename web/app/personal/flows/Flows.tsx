@@ -145,7 +145,7 @@ function App({ secret }: { secret: string }) {
                   <button type="button" className="flowitem" onClick={() => setEdit(toEF(f))}>
                     <strong>{f.name}</strong>
                     <span className="sub">
-                      {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
+                      {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.type === "webhook" ? "Webhook" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
                     </span>
                   </button>
                   <button type="button" className="btn ghost small" title="تنزيل هذا الفلو كملف JSON" onClick={() => downloadJson(fileSafe(f.name), exportFlows([f]))}>تصدير</button>
