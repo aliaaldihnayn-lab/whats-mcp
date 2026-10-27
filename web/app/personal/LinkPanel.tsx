@@ -17,9 +17,10 @@ function Home({ secret, status, reload, origin }: { secret: string; status: Stat
       <div className="chips">
         <Chip ok={status.storage} label="قاعدة البيانات (Redis)" />
         <Chip ok={status.cron} label="المزامنة اليومية (CRON_SECRET)" />
-        <Chip ok={status.ai} label="الذكاء الاصطناعي للفلوات" optional />
+        <Chip ok={status.ai} label="الذكاء الاصطناعي" optional />
         <Chip ok={status.official} label="الرقم الرسمي (Cloud API)" optional />
       </div>
+      <AiTest secret={secret} configured={status.ai} />
       {!status.storage && <div className="note"><p>اربط Upstash Redis من تبويب Storage في مشروعك على فيرسل، ثم أعد النشر. بدونها ما يمكن حفظ الجلسة.</p></div>}
 
       <h3>أرقامك</h3>
@@ -32,6 +33,29 @@ function Home({ secret, status, reload, origin }: { secret: string; status: Stat
       </p>
       <Keys secret={secret} status={status} origin={origin} />
     </>
+  );
+}
+
+function AiTest({ secret, configured }: { secret: string; configured: boolean }) {
+  const [out, setOut] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await call<{ results: { provider: string; ok: boolean; detail: string }[] }>(secret, "/api/personal/ai-test", { method: "POST", body: {} });
+      setOut(r.results.map((x) => `${x.provider === "cheap" ? "المزود الرخيص" : "Claude"}: ${x.ok ? "✓ يشتغل" : "✗ " + x.detail}`));
+    } catch (e) {
+      setOut([errMsg(e)]);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <p>
+      <button type="button" className="btn ghost" disabled={busy} onClick={run}>{busy ? "جاري الاختبار…" : "اختبر الذكاء الاصطناعي"}</button>
+      {!configured && <small> ما فيه مفتاح، شوف <a href="/guide#s3">الخطوات</a>.</small>}
+      {out.map((l) => <span key={l} className="muted" style={{ display: "block" }}>{l}</span>)}
+    </p>
   );
 }
 

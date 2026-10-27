@@ -2,7 +2,7 @@
 
 # واتساب MCP
 
-**[English](README.md)**
+**[English](README.md)** · **تبي بدون تثبيت؟ [شغّله على Vercel (أكثر من رقم، صندوق وارد، فلوات، ردود Claude)](web/README.md#quick-start-personal-account-on-vercel)**
 
 اربط حساب واتساب الشخصي حقك بـ Claude أو Cursor أو أي مساعد ذكاء اصطناعي يدعم بروتوكول MCP. بعد الربط تقدر تقول له:
 
