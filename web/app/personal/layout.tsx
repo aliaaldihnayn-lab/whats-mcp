@@ -7,6 +7,7 @@ import { Mark } from "@/components/Mark";
 import { SecretGate, type Status } from "./shared";
 
 const ITEMS = [
+  { href: "/personal/overview", label: "نظرة عامة", icon: "M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6V11h-6v9zm0-16v5h6V4h-6z" },
   { href: "/personal/inbox", label: "صندوق الوارد", icon: "M4 5h16v11H8l-4 4V5z" },
   { href: "/personal/flows", label: "الفلوات", icon: "M13 2L4 14h7l-1 8 9-12h-7l1-8z" },
   { href: "/personal/knowledge", label: "قاعدة المعرفة", icon: "M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3V4zm3 4h8M8 12h8" },

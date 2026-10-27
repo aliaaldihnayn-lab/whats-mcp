@@ -177,16 +177,38 @@ export type Draft = {
   error?: string;
 };
 
+/** One step of a run. Condition checks, AI output and timings were not recorded before run details existed, so all of those are optional. */
+export type LogStep = {
+  type: string;
+  ok: boolean;
+  detail?: string;
+  /** graph flows: the node this step belongs to */
+  node?: string;
+  /** how long the step took */
+  ms?: number;
+  /** the text an AI step produced (capped), so it can be read later without re-running */
+  output?: string;
+  /** condition node: each check and whether it passed */
+  checks?: { field: string; op: string; value?: string; ok: boolean; note?: string }[];
+};
+
 export type LogEntry = {
+  /** run id, for the details page; entries from before run details have none */
+  id?: string;
   t: number;
+  /** total time from the first step to the last */
+  ms?: number;
   account: string;
   flow: string;
   name: string;
   chat: string;
   chatName?: string;
   msg?: string;
+  /** first 100 characters of the message, for the list */
   text?: string;
+  /** the message that started the run, kept longer than `text` */
+  trigger?: { text?: string; sender?: string; senderName?: string; type?: string; direction?: string };
   status: "ok" | "draft" | "dry" | "error" | "skipped";
   note?: string;
-  actions: { type: string; ok: boolean; detail?: string }[];
+  actions: LogStep[];
 };

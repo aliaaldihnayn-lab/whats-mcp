@@ -2,6 +2,7 @@
 // the channel (send / react / mark read) and Claude are passed in, so the same
 // engine serves both modes and can be tested with plain objects.
 
+import { randomBytes } from "node:crypto";
 import type { RawKV } from "../wa/auth";
 import type { Store, StoredMessage } from "../store";
 import { assertPublicUrl } from "../net";
@@ -11,7 +12,7 @@ import type { Attachment, Loaded } from "../files";
 import { extractFile } from "../kb/extract";
 import { pushLog, readQueue, saveDraft, writeQueue } from "./storage";
 import { successors } from "./graph";
-import type { Action, Cond, Flow, Graph, LogEntry } from "./types";
+import type { Action, Cond, Flow, Graph, LogEntry, LogStep } from "./types";
 
 export type Channel = {
   account: string;
@@ -372,8 +373,8 @@ async function runAgent(a: Extract<Action, { type: "agent" }>, x: Ctx, d: Engine
 
 // ---------- actions ----------
 
-/** `node` is set for graph flows, so the editor can mark which nodes ran. */
-type ActionResult = { type: string; ok: boolean; detail?: string; node?: string };
+type ActionResult = LogStep;
+const OUTPUT_CAP = 1500;
 
 async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"], actions: Action[] = flow.actions): Promise<{ results: ActionResult[]; status: LogEntry["status"]; stop: boolean }> {
   const results: ActionResult[] = [];
@@ -402,6 +403,8 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
   };
 
   for (const a of actions) {
+    const t0 = Date.now();
+    let output: string | undefined;
     try {
       let detail = "";
       switch (a.type) {
@@ -446,6 +449,7 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
         case "ai": {
           const out = await runAi(a, x, d);
           x.vars.ai = out === SKIP ? "" : out;
+          output = x.vars.ai;
           detail = out === SKIP ? "Claude chose not to answer" : `Claude: ${out.slice(0, 160)}`;
           break;
         }
@@ -453,11 +457,14 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
           needChat(a.type);
           const out = await runAi(a, x, d);
           x.vars.ai = out === SKIP ? "" : out;
+          output = x.vars.ai;
           detail = out.includes(SKIP) ? "Claude chose not to reply" : await deliver(x.chat, out, a.quote ? x.msg?.id : undefined);
           break;
         }
         case "agent": {
+          const before = x.vars.ai;
           detail = await runAgent(a, x, d, mode);
+          if (x.vars.ai !== before) output = x.vars.ai;
           break;
         }
         case "webhook": {
@@ -485,10 +492,10 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
           detail = "stopped other flows for this message";
           break;
       }
-      results.push({ type: a.type, ok: true, detail });
+      results.push({ type: a.type, ok: true, detail, ms: Date.now() - t0, ...(output ? { output: output.slice(0, OUTPUT_CAP) } : {}) });
     } catch (e) {
       status = "error";
-      results.push({ type: a.type, ok: false, detail: e instanceof Error ? e.message : String(e) });
+      results.push({ type: a.type, ok: false, detail: e instanceof Error ? e.message : String(e), ms: Date.now() - t0 });
       break; // later actions usually depend on this one
     }
   }
@@ -520,9 +527,10 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
       if (skipped || visited.has(n.id) || ++steps > MAX_STEPS) continue;
       visited.add(n.id);
       if (n.kind === "condition") {
+        const t0 = Date.now();
         const r = await matches({ ...flow, match: n.match, conditions: n.conditions }, x, d);
         const why = r.results.map((c) => `${c.ok ? "✓" : "✗"} ${c.field} ${c.op}${c.value ? ` ${c.value}` : ""}${c.note ? ` (${c.note})` : ""}`).join("; ");
-        results.push({ type: "condition", ok: true, node: n.id, detail: `${r.ok ? "true" : "false"}: ${why}` });
+        results.push({ type: "condition", ok: true, node: n.id, detail: `${r.ok ? "true" : "false"}: ${why}`, ms: Date.now() - t0, checks: r.results });
         await walk(successors(g, n.id, r.ok ? "true" : "false"));
       } else if (n.kind === "action") {
         if (!acted && gate) {
@@ -548,7 +556,12 @@ async function runGraph(flow: Flow, g: Graph, x: Ctx, d: EngineDeps, mode: Flow[
 // ---------- running ----------
 
 function logBase(flow: Flow, x: Ctx, d: EngineDeps): LogEntry {
-  return { t: x.now, account: d.channel.account, flow: flow.id, name: flow.name, chat: x.chat, chatName: x.chatName, msg: x.msg?.id, text: bodyOf(x.msg).slice(0, 100) || undefined, status: "ok", actions: [] };
+  const m = x.msg;
+  return {
+    id: randomBytes(6).toString("hex"), t: x.now, account: d.channel.account, flow: flow.id, name: flow.name, chat: x.chat, chatName: x.chatName, msg: m?.id, text: bodyOf(m).slice(0, 100) || undefined,
+    trigger: m ? { text: bodyOf(m).slice(0, 1000) || undefined, sender: m.sender, senderName: m.senderName, type: m.type, direction: m.direction } : undefined,
+    status: "ok", actions: [],
+  };
 }
 
 async function guards(flow: Flow, x: Ctx, d: EngineDeps): Promise<string | null> {
@@ -558,19 +571,20 @@ async function guards(flow: Flow, x: Ctx, d: EngineDeps): Promise<string | null>
 }
 
 async function fire(flow: Flow, x: Ctx, d: EngineDeps): Promise<{ entry: LogEntry; stop: boolean } | null> {
+  const started = Date.now();
   const entry = logBase(flow, x, d);
   if (flow.graph) {
     const r = await runGraph(flow, flow.graph, x, d, flow.mode, () => guards(flow, x, d));
     if (r.skipped) return { entry: { ...entry, status: "skipped", note: r.skipped, actions: r.results }, stop: false };
     if (!r.acted) return null; // the message took a branch that ends without an action
     if (flow.cooldownSeconds && x.chat && flow.mode !== "dry") await d.state.set(`flow:cd:${flow.id}:${x.chat}`, "1", { ex: flow.cooldownSeconds });
-    return { entry: { ...entry, status: r.status, actions: r.results }, stop: r.stop || flow.stopOnMatch };
+    return { entry: { ...entry, ms: Date.now() - started, status: r.status, actions: r.results }, stop: r.stop || flow.stopOnMatch };
   }
   const why = await guards(flow, x, d);
   if (why) return { entry: { ...entry, status: "skipped", note: why }, stop: false };
   const r = await runActions(flow, x, d, flow.mode);
   if (flow.cooldownSeconds && x.chat && flow.mode !== "dry") await d.state.set(`flow:cd:${flow.id}:${x.chat}`, "1", { ex: flow.cooldownSeconds });
-  return { entry: { ...entry, status: r.status, actions: r.results }, stop: r.stop || flow.stopOnMatch };
+  return { entry: { ...entry, ms: Date.now() - started, status: r.status, actions: r.results }, stop: r.stop || flow.stopOnMatch };
 }
 
 export function triggerMatches(flow: Flow, m: StoredMessage, now: number): boolean {
@@ -660,17 +674,20 @@ export async function runFlows(d: EngineDeps, fresh: StoredMessage[] = [], now =
 
 // ---------- dry run for the dashboard ----------
 
-export type TestSample = { text?: string; sender?: string; senderName?: string; chat?: string; type?: string; direction?: "in" | "out"; replyTo?: string };
+/** `id` and `timestamp` let a replay look the message up in the store (is_first) the way the original run did. */
+export type TestSample = { id?: string; timestamp?: number; text?: string; sender?: string; senderName?: string; chat?: string; type?: string; direction?: "in" | "out"; replyTo?: string };
 
 /** Evaluates one flow against a made-up message without sending or saving anything. */
 export async function testFlow(flow: Flow, sample: TestSample, d: EngineDeps, now = Date.now()) {
   const chat = sample.chat || `${sample.sender || "966500000000"}@s.whatsapp.net`;
   const msg: StoredMessage = {
-    id: "test", waId: chat, direction: sample.direction ?? "in", type: sample.type || "text", text: sample.text ?? "", timestamp: Math.floor(now / 1000),
+    id: sample.id ?? "test", waId: chat, direction: sample.direction ?? "in", type: sample.type || "text", text: sample.text ?? "", timestamp: sample.timestamp ?? Math.floor(now / 1000),
     sender: sample.sender || chat.split("@")[0], senderName: sample.senderName, replyTo: sample.replyTo,
   };
-  const x = makeCtx(flow, d, now, msg, sample.senderName, []);
-  const triggered = flow.trigger.type === "message" ? triggerMatches({ ...flow, activeFrom: 0 }, msg, now) : true;
+  // A scheduled flow has no message, so it runs without one here too.
+  const scheduled = flow.trigger.type === "schedule";
+  const x = makeCtx(flow, d, now, scheduled ? undefined : msg, sample.senderName, []);
+  const triggered = scheduled ? true : triggerMatches({ ...flow, activeFrom: 0 }, msg, now);
   const m = await matches(flow, x, d, true);
   const dry = { ...d, flows: [] };
   const run = triggered && m.ok ? (flow.graph ? await runGraph(flow, flow.graph, x, dry, "dry") : { ...(await runActions(flow, x, dry, "dry")), acted: true }) : { results: [], status: "dry" as const, stop: false, acted: false };
