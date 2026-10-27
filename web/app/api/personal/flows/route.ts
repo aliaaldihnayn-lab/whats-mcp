@@ -5,6 +5,9 @@ import { aiFromEnv, aiStatus, DEFAULT_MODEL, DEFAULT_REPLY_PROMPT } from "@/lib/
 import { testFlow, type Channel } from "@/lib/flows/engine";
 import { deleteFlow, deleteWait, isPaused, listFlows, listWaits, readLog, reorderFlows, saveFlow, setPaused } from "@/lib/flows/storage";
 import { FIELDS, FlowInput, OPS, type Flow } from "@/lib/flows/types";
+import { deleteHookSecret, hookSecret, rotateHookSecret } from "@/lib/flows/hooks";
+
+const origin = (req: Request) => `https://${req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? new URL(req.url).host}`;
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -49,7 +52,9 @@ export async function PUT(req: Request) {
   if (a instanceof Response) return a;
   const { flow } = (await req.json().catch(() => ({}))) as { flow?: unknown };
   try {
-    return Response.json({ flow: await saveFlow(a.base, flow) });
+    const saved = await saveFlow(a.base, flow);
+    if (saved.trigger.type === "webhook") await hookSecret(a.base, saved.id, true);
+    return Response.json({ flow: saved });
   } catch (e) {
     return err(e, 400);
   }
@@ -58,7 +63,9 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   const a = await admin(req);
   if (a instanceof Response) return a;
-  await deleteFlow(a.base, new URL(req.url).searchParams.get("id") ?? "");
+  const id = new URL(req.url).searchParams.get("id") ?? "";
+  await deleteFlow(a.base, id);
+  await deleteHookSecret(a.base, id);
   return Response.json({ deleted: true });
 }
 
@@ -108,6 +115,13 @@ export async function POST(req: Request) {
     return err("Run not found. It may have expired from the log.", 404);
   }
   // { op: "cancel_wait", account, id }: drops a run that is waiting at a delay node, so its later steps never run.
+  // { op: "hook", id } shows a webhook flow's address and secret; { op: "rotate_hook", id } replaces the secret.
+  if (b.op === "hook" || b.op === "rotate_hook") {
+    const f = (await listFlows(a.base)).find((x) => x.id === String(b.id ?? ""));
+    if (!f || f.trigger.type !== "webhook") return err("Save the flow with a webhook trigger first.", 404);
+    const secret = b.op === "rotate_hook" ? await rotateHookSecret(a.base, f.id) : await hookSecret(a.base, f.id, true);
+    return Response.json({ url: `${origin(req)}/api/hooks/${f.id}`, secret });
+  }
   if (b.op === "cancel_wait") {
     const t = await target(a, String(b.account ?? ""));
     if (!t) return err("Unknown number.", 404);

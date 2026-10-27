@@ -111,7 +111,7 @@ const takeAi = (d: EngineDeps, now: number) => bump(d.state, `flow:ai:${localPar
 async function fieldValue(field: Cond["field"], x: Ctx, d: EngineDeps): Promise<string | number | boolean | string[]> {
   const m = x.msg;
   switch (field) {
-    case "text": return bodyOf(m);
+    case "text": return m ? bodyOf(m) : x.vars.text ?? ""; // webhook runs have no message, only the text they were sent
     case "sender": return x.vars.sender;
     case "sender_name": return x.vars.sender_name;
     case "chat": return x.chat;
@@ -125,7 +125,7 @@ async function fieldValue(field: Cond["field"], x: Ctx, d: EngineDeps): Promise<
     case "hour": return localParts(x.now, x.flow.tz).hour;
     case "weekday": return localParts(x.now, x.flow.tz).weekday;
     case "is_reply": return !!m?.replyTo;
-    case "length": return bodyOf(m).length;
+    case "length": return (m ? bodyOf(m) : x.vars.text ?? "").length;
     case "tag": return x.tags;
     case "is_first": {
       if (!m) return false;
@@ -735,6 +735,40 @@ export async function runFlows(d: EngineDeps, fresh: StoredMessage[] = [], now =
   return logs;
 }
 
+// ---------- webhook trigger ----------
+
+export type WebhookInput = { to?: string; text?: string; data: Record<string, string> };
+
+/**
+ * Runs one flow because an outside system called its webhook. It can only message chats this number already
+ * has (people who wrote before or were written to), so a leaked secret cannot turn the number into a bulk sender.
+ * Returns the log entry, or null when the flow's conditions led to no action.
+ */
+export async function runWebhookFlow(flow: Flow, input: WebhookInput, d: EngineDeps, now = Date.now()): Promise<LogEntry | null> {
+  if (d.paused) throw new Error("flows are paused");
+  const known = async (chat: string) => !!chat && (await d.store.messages(chat, 1)).length > 0;
+  const channel: Channel = {
+    ...d.channel,
+    sendText: async (chat, text, replyTo) => {
+      if (!(await known(chat))) throw new Error("a webhook flow can only message chats that already exist on this number");
+      return d.channel.sendText(chat, text, replyTo);
+    },
+  };
+  const deps = { ...d, channel };
+  const chat = input.to ? d.channel.resolveTarget(input.to) : "";
+  const x = makeCtx(flow, deps, now, undefined, chat ? await d.store.getName(chat) : undefined, chat ? await getTags(d.state, chat) : []);
+  x.chat = chat;
+  Object.assign(x.vars, { chat, sender: chat.split("@")[0], text: input.text ?? "" });
+  for (const [k, v] of Object.entries(input.data)) x.vars[`hook_${k}`] = v;
+  // linear flows keep their conditions on the flow itself (graph flows have them in nodes, and fire walks those)
+  if (!(await matches(flow, x, deps)).ok) return null;
+  const fired = await fire(flow, x, deps);
+  if (!fired) return null;
+  const entry: LogEntry = { ...fired.entry, text: input.text?.slice(0, 100), trigger: { text: input.text?.slice(0, 1000), type: "webhook" } };
+  await pushLog(d.state, [entry]);
+  return entry;
+}
+
 // ---------- dry run for the dashboard ----------
 
 /** `id` and `timestamp` let a replay look the message up in the store (is_first) the way the original run did. */
@@ -747,8 +781,8 @@ export async function testFlow(flow: Flow, sample: TestSample, d: EngineDeps, no
     id: sample.id ?? "test", waId: chat, direction: sample.direction ?? "in", type: sample.type || "text", text: sample.text ?? "", timestamp: sample.timestamp ?? Math.floor(now / 1000),
     sender: sample.sender || chat.split("@")[0], senderName: sample.senderName, replyTo: sample.replyTo,
   };
-  // A scheduled flow has no message, so it runs without one here too.
-  const scheduled = flow.trigger.type === "schedule";
+  // A scheduled or webhook flow has no message, so it runs without one here too.
+  const scheduled = flow.trigger.type !== "message";
   const x = makeCtx(flow, d, now, scheduled ? undefined : msg, sample.senderName, []);
   const triggered = scheduled ? true : triggerMatches({ ...flow, activeFrom: 0 }, msg, now);
   const m = await matches(flow, x, d, true);

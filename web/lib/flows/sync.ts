@@ -56,14 +56,11 @@ export async function syncAccount(base: RawKV, a: AccountDeps, opts: { maxMs?: n
   });
 }
 
-/** Runs the flows of the official number on messages the webhook just stored. */
-export async function runOfficialFlows(
-  fresh: StoredMessage[],
-  io: { base: RawKV; store: EngineDeps["store"]; graph: { sendMessage(to: string, payload: Record<string, unknown>, replyTo?: string): Promise<{ messageId: string }>; markRead(id: string): Promise<unknown> }; normalize: (p: string) => string; state: RawKV },
-) {
-  const flows = await flowsFor(io.base, "official");
-  if (!flows.length || (await isPaused(io.base))) return [];
-  const channel: Channel = {
+type OfficialIO = { base: RawKV; store: EngineDeps["store"]; graph: { sendMessage(to: string, payload: Record<string, unknown>, replyTo?: string): Promise<{ messageId: string }>; markRead(id: string): Promise<unknown> }; normalize: (p: string) => string; state: RawKV };
+
+/** Sending through the Cloud API, inside the 24-hour customer window only. */
+export function officialChannel(io: OfficialIO): Channel {
+  return {
     account: "official",
     kind: "official",
     sendText: async (chat, text, replyTo) => {
@@ -77,5 +74,20 @@ export async function runOfficialFlows(
     markRead: async (_chat, msg) => void (await io.graph.markRead(msg.id)),
     resolveTarget: io.normalize,
   };
-  return runFlows({ flows, state: io.state, store: io.store, channel, ai: aiFromEnv(), agent: agentFromEnv(process.env, connectMcp), connectors: () => listConnectors(io.base), deadline: Date.now() + 45_000, knowledge: (q) => knowledgeContext(io.base, q), ...engineLimits() }, fresh);
+}
+
+/** Everything the engine needs besides the flows and the channel, for one number. */
+export const engineExtras = (base: RawKV): Omit<EngineDeps, "flows" | "state" | "store" | "channel"> => ({
+  ai: aiFromEnv(),
+  agent: agentFromEnv(process.env, connectMcp),
+  connectors: () => listConnectors(base),
+  knowledge: (q) => knowledgeContext(base, q),
+  ...engineLimits(),
+});
+
+/** Runs the flows of the official number on messages the webhook just stored. */
+export async function runOfficialFlows(fresh: StoredMessage[], io: OfficialIO) {
+  const flows = await flowsFor(io.base, "official");
+  if (!flows.length || (await isPaused(io.base))) return [];
+  return runFlows({ flows, state: io.state, store: io.store, channel: officialChannel(io), deadline: Date.now() + 45_000, ...engineExtras(io.base) }, fresh);
 }

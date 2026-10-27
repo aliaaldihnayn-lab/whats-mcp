@@ -6,7 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { flowToGraph, freshId, unreachable, X_STEP, Y_STEP } from "@/lib/flows/graph";
 import { exportFlows } from "@/lib/flows/portable";
 import { Graph, type Action, type Cond, type GraphEdge, type GraphNode, type Trigger } from "@/lib/flows/types";
-import { call, errMsg } from "../shared";
+import { call, errMsg, useCopy } from "../shared";
 import { ActionFields } from "./ActionFields";
 import { downloadJson, fileSafe } from "./download";
 import { ACTION_LABEL, FIELD_LABEL, NO_VALUE, OP_LABEL, newAction, type ActionType, type EF } from "./presets";
@@ -48,6 +48,7 @@ const clip = (s: string, n = 46) => (s.length > n ? s.slice(0, n) + "…" : s);
 
 function triggerSummary(t: Trigger) {
   if (t.type === "message") return `${DIR[t.direction]} · ${CHATS[t.chats]}`;
+  if (t.type === "webhook") return "لما يوصل طلب Webhook موقّع";
   return t.atHour !== undefined ? `يومياً بعد الساعة ${t.atHour}:00` : `كل ${t.everyMinutes} دقيقة`;
 }
 function condSummary(conds: Cond[]) {
@@ -289,7 +290,7 @@ export function FlowBuilder(props: Props) {
           {adding ? (
             <Palette from={adding.from ? nodes.find((n) => n.id === adding.from) : undefined} port={adding.port} onPick={addNode} onClose={() => setAdding(null)} />
           ) : selected ? (
-            <NodeEditor node={selected} f={f} setTrigger={(t) => set("trigger", t)} data={data} patch={patch} onRemove={() => removeNode(selected.id)} />
+            <NodeEditor node={selected} f={f} secret={secret} setTrigger={(t) => set("trigger", t)} data={data} patch={patch} onRemove={() => removeNode(selected.id)} />
           ) : (
             <Settings f={f} set={set} data={data} secret={secret} build={build} setRun={(m) => setNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, run: m.get(n.id) } })))} />
           )}
@@ -325,7 +326,7 @@ function Palette({ from, port, onPick, onClose }: { from?: FNode; port?: Port; o
   );
 }
 
-function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNode; f: EF; setTrigger: (t: Trigger) => void; data: BuilderData; patch: (id: string, fn: (s: Spec) => Spec) => void; onRemove: () => void }) {
+function NodeEditor({ node, f, secret, setTrigger, data, patch, onRemove }: { node: FNode; f: EF; secret: string; setTrigger: (t: Trigger) => void; data: BuilderData; patch: (id: string, fn: (s: Spec) => Spec) => void; onRemove: () => void }) {
   const spec = node.data.spec;
   const title = spec.kind === "trigger" ? "المحفز" : spec.kind === "condition" ? "شرط" : TITLE[spec.action.type];
   return (
@@ -336,6 +337,7 @@ function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNod
       </div>
       {node.data.run && <p className={node.data.run.ok ? "mode-note" : "err"}>{node.data.run.ok ? "✓" : "✗"} {node.data.run.detail}</p>}
       {spec.kind === "trigger" && <TriggerFields t={f.trigger} onChange={setTrigger} />}
+      {spec.kind === "trigger" && f.trigger.type === "webhook" && <HookInfo secret={secret} flowId={f.id} />}
       {spec.kind === "condition" && <ConditionFields spec={spec} data={data} onChange={(s) => patch(node.id, () => s)} />}
       {spec.kind === "action" && (
         <>
@@ -348,15 +350,17 @@ function NodeEditor({ node, f, setTrigger, data, patch, onRemove }: { node: FNod
 }
 
 function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => void }) {
+  const pick = (v: string): Trigger => (v === "message" ? { type: "message", direction: "in", chats: "direct" } : v === "webhook" ? { type: "webhook" } : { type: "schedule", everyMinutes: 1440, atHour: 8 });
   return (
     <div className="grid2">
       <label>النوع
-        <select value={t.type} onChange={(e) => onChange(e.target.value === "message" ? { type: "message", direction: "in", chats: "direct" } : { type: "schedule", everyMinutes: 1440, atHour: 8 })}>
+        <select value={t.type} onChange={(e) => onChange(pick(e.target.value))}>
           <option value="message">لما توصل رسالة</option>
           <option value="schedule">على جدول زمني</option>
+          <option value="webhook">لما يوصل طلب Webhook من نظام خارجي</option>
         </select>
       </label>
-      {t.type === "message" ? (
+      {t.type === "message" && (
         <>
           <label>الاتجاه
             <select value={t.direction} onChange={(e) => onChange({ ...t, direction: e.target.value as typeof t.direction })}>
@@ -369,7 +373,8 @@ function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => 
             </select>
           </label>
         </>
-      ) : (
+      )}
+      {t.type === "schedule" && (
         <>
           <label>كل كم دقيقة<input type="number" min={5} value={t.everyMinutes} onChange={(e) => onChange({ ...t, everyMinutes: Number(e.target.value) })} /></label>
           <label>أو يومياً بعد الساعة (اختياري)
@@ -378,6 +383,63 @@ function TriggerFields({ t, onChange }: { t: Trigger; onChange: (t: Trigger) => 
           <p className="hint">الفلو المجدول ما له محادثة، فاستخدم "إرسال لرقم" والذكاء الاصطناعي وWebhook فقط. الجدول يتحقق وقت المزامنة.</p>
         </>
       )}
+    </div>
+  );
+}
+
+/** Address, secret and a signed example request for a webhook-triggered flow. */
+function HookInfo({ secret, flowId }: { secret: string; flowId?: string }) {
+  const [info, setInfo] = useState<{ url: string; secret: string } | null>(null);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { copied, copy } = useCopy();
+  if (!flowId) return <p className="mode-note">احفظ الفلو أول، وبعدها يطلع لك رابط الـ Webhook وسرّه هنا.</p>;
+  const load = async (op: "hook" | "rotate_hook") => {
+    if (op === "rotate_hook" && !confirm("تغيير السر يوقف أي نظام يستخدم السر الحالي لين تحدّثه. أكمل؟")) return;
+    setBusy(true);
+    setError("");
+    try {
+      setInfo(await call<{ url: string; secret: string }>(secret, "/api/personal/flows", { body: { op, id: flowId } }));
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sample = info
+    ? `URL='${info.url}'
+SECRET='${info.secret}'
+BODY='{"to":"9665XXXXXXXX","text":"طلب جديد","data":{"order":"1234"}}'
+TS=$(date +%s)
+SIG="sha256=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"
+curl -X POST "$URL" -H 'Content-Type: application/json' -H "X-Timestamp: $TS" -H "X-Signature: $SIG" -d "$BODY"`
+    : "";
+  return (
+    <div className="hook-info">
+      {!info ? (
+        <button type="button" className="btn ghost small" disabled={busy} onClick={() => void load("hook")}>{busy ? "…" : "اعرض الرابط والسر"}</button>
+      ) : (
+        <>
+          <label>الرابط</label>
+          <div className="code"><pre dir="ltr">{info.url}</pre><button type="button" className="copy" onClick={() => copy(info.url, "u")}>{copied === "u" ? "تم" : "انسخ"}</button></div>
+          <label>السر</label>
+          <div className="code"><pre dir="ltr">{show ? info.secret : "whsec_" + "•".repeat(20)}</pre><button type="button" className="copy" onClick={() => copy(info.secret, "s")}>{copied === "s" ? "تم" : "انسخ"}</button></div>
+          <div className="row">
+            <button type="button" className="btn ghost small" onClick={() => setShow(!show)}>{show ? "إخفاء السر" : "إظهار السر"}</button>
+            <button type="button" className="btn ghost small danger" disabled={busy} onClick={() => void load("rotate_hook")}>تغيير السر</button>
+          </div>
+          <details>
+            <summary>مثال طلب موقّع (curl)</summary>
+            <div className="code"><pre dir="ltr">{sample}</pre><button type="button" className="copy" onClick={() => copy(sample, "c")}>{copied === "c" ? "تم" : "انسخ"}</button></div>
+          </details>
+        </>
+      )}
+      {error && <p className="err">{error}</p>}
+      <p className="hint">
+        كل طلب لازم يحمل X-Timestamp (ثواني unix) وX-Signature بقيمة sha256=HMAC-SHA256 للنص "الوقت.الجسم" بالسر. الطلب الأقدم من 5 دقائق أو المكرر ينرفض، والحد 60 طلب بالدقيقة.
+        الجسم: to (رقم المحادثة)، text يصير {"{{text}}"}، وحقول data تصير {"{{hook_الاسم}}"}. الفلو يرسل بس لمحادثات موجودة عندك، ولازم يكون مفعّل ومحفوظ بهذا المحفز.
+      </p>
     </div>
   );
 }

@@ -122,7 +122,7 @@ export function RunDetail({ id }: { id: string }) {
           <p className="muted">
             {new Date(run.t).toLocaleString("ar", { dateStyle: "medium", timeStyle: "medium" })}
             {run.accountLabel ? ` · ${run.accountLabel}` : ""}
-            {run.chat ? ` · ${run.chatName || phone}` : " · تشغيل مجدول"}
+            {run.chat ? ` · ${run.chatName || phone}` : run.trigger?.type === "webhook" ? " · طلب Webhook" : " · تشغيل مجدول"}
           </p>
         </div>
         <div className="run-meta">
@@ -184,7 +184,7 @@ export function RunDetail({ id }: { id: string }) {
           </section>
         )}
         <section className="card run-msg">
-          <h3>{trig ? "الرسالة اللي شغّلت الفلو" : "المحفز"}</h3>
+          <h3>{trig?.type === "webhook" ? "نص طلب الـ Webhook" : trig ? "الرسالة اللي شغّلت الفلو" : "المحفز"}</h3>
           {trig ? (
             <>
               <p className="run-who">
