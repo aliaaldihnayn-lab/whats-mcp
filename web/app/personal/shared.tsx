@@ -34,6 +34,8 @@ export type Status = {
   cron: boolean;
   official: boolean;
   flowsPaused: boolean;
+  secretWarning?: string | null;
+  version?: { repo: string | null; commit: string | null; branch: string | null; env: string };
 };
 
 type Session = { secret: string; status: Status; reload: () => Promise<void> };
