@@ -33,6 +33,7 @@ export type Status = {
   cron: boolean;
   official: boolean;
   flowsPaused: boolean;
+  secretWarning?: string | null;
 };
 
 type Session = { secret: string; status: Status; reload: () => Promise<void> };

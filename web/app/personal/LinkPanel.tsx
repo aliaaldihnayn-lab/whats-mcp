@@ -20,6 +20,7 @@ function Home({ secret, status, reload, origin }: { secret: string; status: Stat
         <Chip ok={status.ai} label="الذكاء الاصطناعي" optional />
         <Chip ok={status.official} label="الرقم الرسمي (Cloud API)" optional />
       </div>
+      {status.secretWarning && <div className="note"><p><strong>تنبيه على كلمة السر:</strong> {status.secretWarning} لا تستخدمها داخل الروابط، وأنشئ مفتاح جهاز (wmk_…) للربط بدلها.</p></div>}
       <AiTest secret={secret} configured={status.ai} />
       {!status.storage && <div className="note"><p>اربط Upstash Redis من تبويب Storage في مشروعك على فيرسل، ثم أعد النشر. بدونها ما يمكن حفظ الجلسة.</p></div>}
 
