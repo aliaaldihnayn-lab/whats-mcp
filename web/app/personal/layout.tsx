@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { Mark } from "@/components/Mark";
 import { SecretGate, forgetSecret, useApi, type Status } from "./shared";
@@ -19,6 +19,7 @@ const ICON = {
   bell: "M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0",
   sun: "M12 17a5 5 0 100-10 5 5 0 000 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
   moon: "M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z",
+  search: "M21 21l-4.3-4.3M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z",
 };
 
 type Item = { href: string; label: string; icon: string };
@@ -87,6 +88,8 @@ function useTheme() {
 
 function Shell({ status, children }: { status: Status; children: ReactNode }) {
   const path = usePathname();
+  const router = useRouter();
+  const [q, setQ] = useState("");
   const [theme, setTheme] = useTheme();
   const [mini, setMini] = useState(() => read(NAV_KEY) === "mini");
   const [shut, setShut] = useState<Record<string, boolean>>(() => {
@@ -103,7 +106,10 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
   const paired = status.accounts.filter((a) => a.paired).length;
   const who = status.accounts.find((a) => a.paired);
   const whoName = who?.name ?? who?.label ?? "";
-  const here = GROUPS.flatMap((g) => g.items).find((it) => isActive(path, it.href));
+  const all = GROUPS.flatMap((g) => g.items);
+  const here = all.find((it) => isActive(path, it.href));
+  const needle = q.trim();
+  const matches = needle ? all.filter((it) => it.label.includes(needle)) : null;
   const sub = path.startsWith("/personal/flows/run") ? "تفاصيل التشغيل" : null;
 
   const toggleMini = () => {
@@ -115,6 +121,13 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
     write(GROUPS_KEY, JSON.stringify(next));
     setShut(next);
   };
+
+  const link = (it: Item) => (
+    <Link key={it.href} href={it.href} prefetch title={mini ? it.label : undefined} aria-current={isActive(path, it.href) ? "page" : undefined}>
+      <Svg d={it.icon} />
+      <span className="lbl">{it.label}</span>
+    </Link>
+  );
 
   return (
     <div className="app" data-nav={mini ? "mini" : "full"}>
@@ -128,8 +141,30 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
             <Svg d={ICON.fold} />
           </button>
         </div>
+        <form
+          className="side-search"
+          role="search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (matches?.[0]) {
+              router.push(matches[0].href);
+              setQ("");
+            }
+          }}
+        >
+          <input type="text" inputMode="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="ابحث هنا.." aria-label="ابحث في أقسام اللوحة" autoComplete="off" />
+          <Svg d={ICON.search} />
+        </form>
+        <button type="button" className="side-search-btn" onClick={toggleMini} aria-label="وسّع القائمة للبحث">
+          <Svg d={ICON.search} />
+        </button>
         <nav className="app-nav" aria-label="أقسام لوحة التحكم">
-          {GROUPS.map((g) => {
+          {matches ? (
+            <div className="nav-group">
+              <div className="nav-items">{matches.length ? matches.map(link) : <p className="nav-empty">ما لقينا قسم بهذا الاسم</p>}</div>
+            </div>
+          ) : (
+            GROUPS.map((g) => {
             const active = g.items.some((it) => isActive(path, it.href));
             // the section that holds the current page never folds shut
             const open = !shut[g.id] || active;
@@ -140,16 +175,12 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
                   <Svg d={ICON.down} />
                 </button>
                 <div className="nav-items" hidden={!open}>
-                  {g.items.map((it) => (
-                    <Link key={it.href} href={it.href} prefetch title={mini ? it.label : undefined} aria-current={isActive(path, it.href) ? "page" : undefined}>
-                      <Svg d={it.icon} />
-                      <span className="lbl">{it.label}</span>
-                    </Link>
-                  ))}
+                  {g.items.map(link)}
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </nav>
         <div className="app-foot">
           <div className="foot-status">
@@ -169,21 +200,16 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
       </aside>
       <div className="app-col">
         <header className="app-top">
-          <nav className="crumbs" aria-label="مسار الصفحة">
-            <span>لوحة التحكم</span>
-            {here && (
-              <>
-                <span className="sep" aria-hidden="true">/</span>
-                <span aria-current={sub ? undefined : "page"}>{here.label}</span>
-              </>
-            )}
+          <div className="page-title">
+            <Svg d={ICON.overview} />
+            {here && <span aria-current={sub ? undefined : "page"}>{here.label}</span>}
             {sub && (
               <>
                 <span className="sep" aria-hidden="true">/</span>
                 <span aria-current="page">{sub}</span>
               </>
             )}
-          </nav>
+          </div>
           <div className="top-tools">
             <div className="theme" role="group" aria-label="المظهر">
               <button type="button" aria-pressed={theme === "light"} aria-label="مظهر فاتح" onClick={() => setTheme("light")}>
