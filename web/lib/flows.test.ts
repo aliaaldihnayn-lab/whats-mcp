@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { MemoryKV, Store, type StoredMessage } from "./store";
 import { MemoryRawKV } from "./wa/auth";
 import { runFlows, testFlow, norm, render, type Channel, type EngineDeps } from "./flows/engine";
-import { FlowInput, type Flow, type FlowDraft } from "./flows/types";
+import { FlowInput, Graph, type Flow, type FlowDraft } from "./flows/types";
+import { flowToGraph, unreachable } from "./flows/graph";
 import { listDrafts, readLog, saveFlow, listFlows, flowsFor, setPaused, isPaused } from "./flows/storage";
 import { GUARD, SKIP, type AiClient } from "./flows/ai";
 import { literalCheck } from "./net";
@@ -346,4 +347,152 @@ test("any model can drive connectors: own MCP client + tool loop over an OpenAI-
   assert.equal(seen[0].tools[0].function.name, "shop__create_product");
   assert.match(JSON.stringify(seen[0].messages[1].content), /https:\/\/app\/f/); // no vision: link only
   assert.equal(seen[1].messages.at(-1).content, "created #7");
+});
+
+// ---------- graph flows ----------
+
+const priceBranch = () =>
+  mkFlow({
+    actions: [],
+    graph: {
+      nodes: [
+        { id: "t", kind: "trigger", x: 0, y: 0 },
+        { id: "c1", kind: "condition", x: 300, y: 0, match: "all", conditions: [{ field: "text", op: "contains_any", value: "سعر, price" }] },
+        { id: "a1", kind: "action", x: 600, y: 0, action: { type: "reply", text: "الأسعار في الرابط", quote: false } },
+        { id: "a2", kind: "action", x: 600, y: 150, action: { type: "reply", text: "كيف أخدمك؟", quote: false } },
+      ],
+      edges: [
+        { from: "t", port: "next", to: "c1" },
+        { from: "c1", port: "true", to: "a1" },
+        { from: "c1", port: "false", to: "a2" },
+      ],
+    },
+  });
+
+test("graph flow: a condition node sends each message down its true or false wire", async () => {
+  const { deps, sent } = setup([priceBranch()]);
+  const yes = msg({ text: "كم السعر؟" });
+  const no = msg({ text: "السلام عليكم" });
+  await deps.store.saveMessage(yes);
+  await deps.store.saveMessage(no);
+  const logs = await runFlows(deps, [yes, no], NOW);
+  assert.deepEqual(sent.map((m) => m.text), ["الأسعار في الرابط", "كيف أخدمك؟"]);
+  assert.equal(logs.length, 2);
+  // runFlows hands its list to pushLog, which reverses it in place, so look entries up instead of indexing
+  assert.ok(logs.some((l) => /^true: ✓ text contains_any/.test(l.actions[0].detail ?? "")));
+  assert.ok(logs.some((l) => /^false: ✗ /.test(l.actions[0].detail ?? "")));
+});
+
+test("graph flow: a branch that ends without an action sends nothing, logs nothing and uses no cap", async () => {
+  const flow = mkFlow({
+    maxPerHour: 1,
+    actions: [],
+    graph: {
+      nodes: [
+        { id: "t", kind: "trigger", x: 0, y: 0 },
+        { id: "c1", kind: "condition", x: 300, y: 0, match: "all", conditions: [{ field: "text", op: "contains", value: "سعر" }] },
+        { id: "a1", kind: "action", x: 600, y: 0, action: { type: "reply", text: "ok", quote: false } },
+      ],
+      edges: [{ from: "t", port: "next", to: "c1" }, { from: "c1", port: "true", to: "a1" }],
+    },
+  });
+  const { deps, sent } = setup([flow]);
+  const other = msg({ text: "مرحبا" });
+  const price = msg({ text: "السعر كم" });
+  await deps.store.saveMessage(other);
+  await deps.store.saveMessage(price);
+  const logs = await runFlows(deps, [other, price], NOW);
+  assert.equal(sent.length, 1, "the non-matching message must not use the hourly cap of 1");
+  assert.equal(logs.length, 1);
+});
+
+test("graph flow: an old linear flow converted to a graph behaves the same", async () => {
+  const linear = mkFlow({ conditions: [{ field: "text", op: "contains_any", value: "سعر" }], actions: [{ type: "tag", tag: "price" }, { type: "reply", text: "تمام", quote: false }] });
+  const asGraph = mkFlow({ actions: [], graph: flowToGraph(linear) });
+  for (const [flow, wantSent] of [[linear, 1], [asGraph, 1]] as const) {
+    const { deps, sent, state } = setup([flow]);
+    const hit = msg({ text: "السعر؟" });
+    const miss = msg({ text: "هلا" });
+    await deps.store.saveMessage(hit);
+    await deps.store.saveMessage(miss);
+    await runFlows(deps, [hit, miss], NOW);
+    assert.equal(sent.length, wantSent);
+    assert.equal(sent[0].text, "تمام");
+    assert.equal(await state.get(`flow:tags:${CHAT}`), JSON.stringify(["price"]));
+  }
+});
+
+test("graph flow: a failing action stops its own wires, other branches still run", async () => {
+  const flow = mkFlow({
+    actions: [],
+    graph: {
+      nodes: [
+        { id: "t", kind: "trigger", x: 0, y: 0 },
+        { id: "a1", kind: "action", x: 300, y: 0, action: { type: "webhook", url: "https://127.0.0.1/hook", method: "POST", headers: {} } },
+        { id: "a2", kind: "action", x: 600, y: 0, action: { type: "reply", text: "after-failure", quote: false } },
+        { id: "a3", kind: "action", x: 300, y: 150, action: { type: "reply", text: "other-branch", quote: false } },
+      ],
+      edges: [{ from: "t", port: "next", to: "a1" }, { from: "a1", port: "next", to: "a2" }, { from: "t", port: "next", to: "a3" }],
+    },
+  });
+  const { deps, sent } = setup([flow]);
+  const m = msg();
+  await deps.store.saveMessage(m);
+  const [log] = await runFlows(deps, [m], NOW);
+  assert.deepEqual(sent.map((x) => x.text), ["other-branch"]);
+  assert.equal(log.status, "error");
+});
+
+test("graph flow: a node reached by two wires runs once, and cycles cannot be saved", async () => {
+  const join = mkFlow({
+    actions: [],
+    graph: {
+      nodes: [
+        { id: "t", kind: "trigger", x: 0, y: 0 },
+        { id: "c1", kind: "condition", x: 300, y: 0, match: "any", conditions: [{ field: "text", op: "not_empty" }] },
+        { id: "a1", kind: "action", x: 600, y: 0, action: { type: "reply", text: "once", quote: false } },
+      ],
+      edges: [{ from: "t", port: "next", to: "c1" }, { from: "c1", port: "true", to: "a1" }, { from: "c1", port: "false", to: "a1" }, { from: "t", port: "next", to: "a1" }],
+    },
+  });
+  const { deps, sent } = setup([join]);
+  const m = msg();
+  await deps.store.saveMessage(m);
+  await runFlows(deps, [m], NOW);
+  assert.equal(sent.length, 1);
+});
+
+test("graph validation rejects broken wiring and finds orphan nodes", () => {
+  const t = { id: "t", kind: "trigger" as const, x: 0, y: 0 };
+  const a = { id: "a1", kind: "action" as const, x: 0, y: 0, action: { type: "mark_read" as const } };
+  const c = { id: "c1", kind: "condition" as const, x: 0, y: 0, match: "all" as const, conditions: [{ field: "text" as const, op: "not_empty" as const }] };
+  const ok = Graph.safeParse({ nodes: [t, c, a], edges: [{ from: "t", port: "next", to: "c1" }, { from: "c1", port: "true", to: "a1" }] });
+  assert.ok(ok.success);
+  const bad = (g: unknown) => assert.equal(Graph.safeParse(g).success, false);
+  bad({ nodes: [t, { ...t, id: "t2" }, a], edges: [] }); // two triggers
+  bad({ nodes: [t, c], edges: [] }); // no action
+  bad({ nodes: [t, a], edges: [{ from: "a1", port: "next", to: "t" }] }); // into the trigger
+  bad({ nodes: [t, a], edges: [{ from: "t", port: "true", to: "a1" }] }); // true port on a non-condition
+  bad({ nodes: [t, c, a], edges: [{ from: "c1", port: "next", to: "a1" }] }); // condition without true/false
+  bad({ nodes: [t, a], edges: [{ from: "t", port: "next", to: "ghost" }] }); // missing node
+  bad({ nodes: [t, a, { ...a }], edges: [] }); // duplicate id
+  if (!ok.success) return;
+  assert.deepEqual(unreachable({ nodes: [t, c, a, { ...a, id: "a9" }], edges: ok.data.edges }), ["a9"]);
+});
+
+test("testFlow on a graph flow reports which branch the sample took without sending", async () => {
+  const { deps, sent } = setup([]);
+  const r = await testFlow(priceBranch(), { text: "كم السعر" }, deps, NOW);
+  assert.equal(r.matched, true);
+  assert.equal(r.actions[0].type, "condition");
+  assert.match(r.actions[0].detail ?? "", /^true:/);
+  assert.match(r.actions[1].detail ?? "", /would send/);
+  assert.equal(sent.length, 0);
+});
+
+test("storage accepts a graph flow with no linear actions and still refuses an empty one", async () => {
+  const base = new MemoryRawKV();
+  const f = await saveFlow(base, { name: "g", actions: [], graph: priceBranch().graph });
+  assert.ok(f.graph);
+  await assert.rejects(() => saveFlow(base, { name: "empty", actions: [] }), /at least one action/);
 });
