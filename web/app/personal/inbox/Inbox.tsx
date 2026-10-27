@@ -10,6 +10,7 @@ type Account = { id: string; label: string; kind: "personal" | "official" };
 type Draft = { id: string; account: string; accountLabel?: string; flowName: string; chat: string; chatName?: string; text: string; replyTo?: string; about?: { id: string; text?: string; who?: string }; createdAt: number };
 
 const EMOJIS = ["👍", "❤️", "😂", "🙏", "✅"];
+const initial = (s: string) => [...s.replace(/^\+/, "").trim()][0] ?? "؟";
 const label = (c: { waId: string; name?: string }) => c.name || (c.waId.endsWith("@g.us") ? "مجموعة" : "+" + c.waId.split("@")[0]);
 
 function short(sec: number) {
@@ -199,12 +200,15 @@ function App({ secret, status }: { secret: string; status: Status }) {
               {chats.map((c) => (
                 <li key={c.waId}>
                   <button type="button" aria-current={active === c.waId} onClick={() => (stick.current = true, setActive(c.waId), setTab("chats"))}>
-                    <div className="top">
-                      <span className="nm">{label(c)}{c.drafts ? <span className="badge">{c.drafts}</span> : null}</span>
-                      <span className="tm">{short(c.lastAt)}</span>
-                    </div>
-                    <div className="pv">{c.last ? `${c.last.direction === "out" ? "أنت: " : ""}${c.last.text}` : ""}</div>
-                    {c.tags.length > 0 && <div>{c.tags.map((t) => <span className="tag" key={t}>{t}</span>)}</div>}
+                    <span className="av" aria-hidden="true">{initial(label(c))}</span>
+                    <span className="cbody">
+                      <span className="top">
+                        <span className="nm">{label(c)}{c.drafts ? <span className="badge">{c.drafts}</span> : null}</span>
+                        <span className="tm">{short(c.lastAt)}</span>
+                      </span>
+                      <span className="pv">{c.last ? `${c.last.direction === "out" ? "أنت: " : ""}${c.last.text}` : ""}</span>
+                      {c.tags.length > 0 && <span className="ctags">{c.tags.map((t) => <span className="tag" key={t}>{t}</span>)}</span>}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -215,8 +219,11 @@ function App({ secret, status }: { secret: string; status: Status }) {
               {drafts.map((d) => (
                 <li key={d.id}>
                   <button type="button" onClick={() => (setAccount(d.account), setActive(d.chat), setTab("chats"))}>
-                    <div className="top"><span className="nm">{d.chatName || "+" + d.chat.split("@")[0]}</span><span className="tm">{short(d.createdAt / 1000)}</span></div>
-                    <div className="pv">{d.text}</div>
+                    <span className="av" aria-hidden="true">{initial(d.chatName || d.chat.split("@")[0])}</span>
+                    <span className="cbody">
+                      <span className="top"><span className="nm">{d.chatName || "+" + d.chat.split("@")[0]}</span><span className="tm">{short(d.createdAt / 1000)}</span></span>
+                      <span className="pv">{d.text}</span>
+                    </span>
                   </button>
                 </li>
               ))}

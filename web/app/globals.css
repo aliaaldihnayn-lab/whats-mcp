@@ -1175,3 +1175,43 @@ td.vars { display: flex; flex-wrap: wrap; gap: 4px; }
 
 /* phones: one column, whatever the desktop rules above say (the sidebar is a fixed bottom bar there) */
 @media (max-width: 760px) { .app, .app[data-nav="mini"] { grid-template-columns: minmax(0, 1fr); } }
+
+/* =====================================================================
+   Sizes and cards: one type scale (14 body, 13 secondary, 12 captions, 16 inner titles, 28 page title)
+   and soft cards for rows. The chat list rows become cards with an avatar.
+   ===================================================================== */
+.app .chatlist { display: grid; align-content: start; gap: 2px; padding: 8px; }
+.app .chatlist button { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: var(--r-md); }
+.app .chatlist button:hover { background: var(--paper); box-shadow: var(--shadow-1); }
+.app .chatlist button[aria-current="true"] { background: var(--paper); box-shadow: var(--shadow-1), inset 0 0 0 1px var(--accent-t3); }
+.app .chatlist .av { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent-t2); color: var(--accent); font-size: var(--fs-md); font-weight: 600; }
+.app .chatlist .cbody { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.app .chatlist .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.app .chatlist .nm { font: 600 var(--fs-md)/1.4 var(--font-ui); }
+.app .chatlist .tm { font-size: var(--fs-xs); }
+.app .chatlist .pv { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.app .chatlist .ctags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.app .chatlist .empty { padding: 24px 12px; }
+
+.app .thread header h4 { font: 600 var(--fs-lg)/1.4 var(--font-ui); }
+.app .m { font-size: var(--fs-md); }
+.app .m .quote, .app .m .who { font-size: var(--fs-sm); }
+.app .m .meta { font-size: var(--fs-xs); }
+
+.app .section-head h4, .panel-head h4, .panel-stack section h4 { font: 600 var(--fs-lg)/1.4 var(--font-ui); }
+.app .stat { box-shadow: none; font-size: var(--fs-sm); }
+.app .stat strong { font-size: var(--fs-lg); }
+.app .kpis { gap: 16px; }
+.app .kpi strong small { font-size: var(--fs-md); }
+.app .run-head h2 { font-size: 24px; }
+.app .builder-name { font-size: var(--fs-lg); }
+.app .empty { font-size: var(--fs-md); }
+.app input[type="file"] { font: 400 var(--fs-md) var(--font-ui); }
+.tl-output { font-size: var(--fs-sm); }
+
+.app .flowitem { padding: 14px 16px; border-radius: var(--r-md); box-shadow: none; }
+.app .flowitem:hover { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.app .flowitem[aria-current="true"] { box-shadow: inset 0 0 0 2px var(--accent); }
+.app .flowitem strong { font-size: var(--fs-md); }
+.app .flowitem .sub, .app .list .sub { font-size: var(--fs-sm); }
+.app .list li { padding: 14px 0; }
