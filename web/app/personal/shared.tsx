@@ -187,24 +187,6 @@ export function useApi<T = any>(path: string | null, opts: { fresh?: number; pol
   return { data, error, loading, reload: () => run(true), set };
 }
 
-export function Nav({ current }: { current: "link" | "inbox" | "flows" | "knowledge" }) {
-  const items = [
-    ["link", "/personal", "الأرقام والمفاتيح"],
-    ["inbox", "/personal/inbox", "صندوق الوارد"],
-    ["flows", "/personal/flows", "الفلوات"],
-    ["knowledge", "/personal/knowledge", "قاعدة المعرفة"],
-  ] as const;
-  return (
-    <nav className="tabs" aria-label="أقسام لوحة التحكم">
-      {items.map(([id, href, label]) => (
-        <a key={id} href={href} aria-current={current === id ? "page" : undefined}>
-          {label}
-        </a>
-      ))}
-    </nav>
-  );
-}
-
 export function useCopy() {
   const [done, setDone] = useState("");
   const copy = async (text: string, id = "x") => {

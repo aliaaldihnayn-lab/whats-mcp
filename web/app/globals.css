@@ -330,9 +330,8 @@ h1, h2, h3 { font-family: var(--display); }
 .dot.off { background: var(--bad); }
 .app-main { min-width: 0; padding: 24px clamp(16px, 3vw, 40px) 48px; }
 
-/* pages still carry their own header and tab strip until they are migrated */
+/* page chrome lives in the layout */
 .app-main > .wrap, .app-main .wrap.wide { max-width: none; padding: 0; }
-.app-main .top { display: none; }
 .app-main section { border-top: 0; padding: 0; }
 .app-main h2 { font-size: clamp(26px, 3vw, 34px); margin-bottom: 8px; }
 .app-main h3 { font-size: 20px; font-weight: 600; margin: 28px 0 10px; }
@@ -391,6 +390,10 @@ h1, h2, h3 { font-family: var(--display); }
   .app-nav a { flex-direction: column; gap: 2px; padding: 7px 4px; font-size: 12px; text-align: center; }
   .app-main { padding: 16px 14px 92px; }
   .app-main .inbox { height: calc(100dvh - 124px); }
+  .app .thread header { padding: 10px 12px; gap: 8px; }
+  .app .thread header h4 { flex: 1 1 0; min-width: 120px; }
+  .app .m .acts button:not(:first-child) { display: none; }
+  .app .m:focus-within .acts button { display: inline-block; }
   .app .flows { grid-template-columns: 1fr; }
   .app .toast { inset-block-end: 88px; }
 }
