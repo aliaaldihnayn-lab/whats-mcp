@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { Code } from "@/components/Code";
 import { Mark } from "@/components/Mark";
+import { Secrets } from "@/components/Secrets";
 
 export const metadata = { title: "دليل الإعداد الكامل | واتساب MCP", description: "كل خطوات التثبيت والربط: فيرسل، قاعدة البيانات، مفاتيح الذكاء الاصطناعي، واتساب، Claude، الفلوات والمساعد." };
 
@@ -51,6 +52,7 @@ export default function Guide() {
 
         <section aria-labelledby="s1">
           <h2 id="s1">1. حساب فيرسل ونشر النسخة</h2>
+          <Secrets />
           <ol className="steps">
             <li><strong>أنشئ حساب Vercel</strong><p>من vercel.com بخطة Hobby المجانية، وسجّل بحساب GitHub.</p></li>
             <li><strong>اضغط «انشر نسختك» من الصفحة الرئيسية</strong><p>يستنسخ المشروع لحسابك على GitHub وينشره. الزر ينشئ قاعدة Upstash Redis معه.</p></li>
@@ -104,7 +106,7 @@ export default function Guide() {
             <li><strong>أنشئ مفتاح API</strong><p>من منصة DeepSeek (platform.deepseek.com). لا تشاركه مع أحد ولا ترسله في أي محادثة.</p></li>
             <li><strong>أضف المتغيرات في Vercel</strong><p>مشروعك ← Settings ← Environment Variables، وأضف: <code>AI_COMPAT_URL</code> = <code>https://api.deepseek.com</code>، و<code>AI_COMPAT_KEY</code> = مفتاحك، و<code>AI_COMPAT_MODEL</code> = <code>deepseek-flash</code> (الأرخص، يدعم الأدوات والصور) أو <code>deepseek-v4-pro</code> (أقوى، بدون صور).</p></li>
             <li><strong>Redeploy</strong><p>من تبويب Deployments ← النقاط الثلاث على آخر نشر ← Redeploy.</p></li>
-            <li><strong>تأكد</strong><p>افتح <code>/personal/flows</code> وتأكد إن شارة الذكاء صارت «جاهز». جرّب فلو بسيط قبل ما تفعّله تلقائياً.</p></li>
+            <li><strong>تأكد بزر الاختبار</strong><p>افتح <code>/personal</code> واضغط «اختبر الذكاء الاصطناعي». يرسل سؤال صغير للمزود ويقول لك يشتغل أو وش الخطأ (مفتاح غلط، اسم موديل غلط). بعدها جرّب فلو بسيط قبل ما تفعّله تلقائياً.</p></li>
           </ol>
           <h3>أو Claude</h3>
           <p>أضف <code>ANTHROPIC_API_KEY</code> من console.anthropic.com ثم Redeploy. هذا الأدق للمساعد اللي ينفذ مهام بالموصلات.</p>

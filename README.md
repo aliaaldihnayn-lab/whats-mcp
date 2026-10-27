@@ -7,7 +7,7 @@
 [![45 tools](https://img.shields.io/badge/tools-45-blue)](#tools)
 [![whatsmeow](https://img.shields.io/badge/whatsmeow-multidevice-25D366?logo=whatsapp&logoColor=white)](https://github.com/tulir/whatsmeow)
 
-**[اقرأ بالعربية](README.ar.md)**
+**[اقرأ بالعربية](README.ar.md)** · **Prefer no install? [Run it on Vercel (multiple numbers, inbox, flows, Claude replies)](web/README.md#quick-start-personal-account-on-vercel)**
 
 A single-binary Go [MCP](https://modelcontextprotocol.io/) server that wraps [whatsmeow](https://github.com/tulir/whatsmeow) to expose a personal WhatsApp account to LLMs. `whatsapp-mcp serve` runs as a lightweight HTTP daemon on `127.0.0.1:8765`; MCP clients (Claude Desktop, Cursor, Claude Code, etc.) connect to it via HTTP — no process spawning, no stdin/stdout juggling. Messages are cached in local SQLite and only travel to the model when the agent calls a tool.
 
