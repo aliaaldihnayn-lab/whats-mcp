@@ -1,4 +1,4 @@
-import type { Action, Cond, Trigger } from "@/lib/flows/types";
+import type { Action, Cond, Graph, Trigger } from "@/lib/flows/types";
 
 export type EF = {
   id?: string;
@@ -9,6 +9,8 @@ export type EF = {
   match: "all" | "any";
   conditions: Cond[];
   actions: Action[];
+  /** node graph; flows saved before the node editor have none and are converted when opened */
+  graph?: Graph;
   mode: "auto" | "approve" | "dry";
   maxAgeMinutes: number;
   cooldownSeconds: number;
