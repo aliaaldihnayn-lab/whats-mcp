@@ -1,4 +1,5 @@
 import { Code } from "@/components/Code";
+import { Copy } from "@/components/Copy";
 import { Mark, Seal } from "@/components/Mark";
 import { Secrets } from "@/components/Secrets";
 import { origin as getOrigin } from "@/lib/origin";
@@ -131,7 +132,7 @@ export default async function Home() {
                   <li>
                     <strong>افتح النظام واربط رقمك</strong>
                     <p>
-                      افتح <code>/personal</code> في نسختك، اكتب رقمك، وأدخل الرمز في واتساب من الأجهزة المرتبطة.
+                      افتح <Copy value={origin + "/personal"}>/personal</Copy> في نسختك، اكتب رقمك، وأدخل الرمز في واتساب من الأجهزة المرتبطة.
                     </p>
                   </li>
                   <li>
@@ -239,18 +240,18 @@ export default async function Home() {
 
             <h3>الربط الرسمي لرقم الأعمال</h3>
             <p>
-              أنشئ تطبيق Business من <a href="https://developers.facebook.com/apps">developers.facebook.com</a> وأضف له WhatsApp، وانشر نسختك، ثم ضع في Vercel المفاتيح التالية، ووصّل الـ Webhook على <code>/api/webhook</code>. صفحة <code>/setup</code> توريك وش ناقص.
+              أنشئ تطبيق Business من <a href="https://developers.facebook.com/apps">developers.facebook.com</a> وأضف له WhatsApp، وانشر نسختك، ثم ضع في Vercel المفاتيح التالية، ووصّل الـ Webhook على <Copy value={origin + "/api/webhook"}>/api/webhook</Copy>. صفحة <Copy value={origin + "/setup"}>/setup</Copy> توريك وش ناقص.
             </p>
             <div className="envs">
-              <code>WHATSAPP_ACCESS_TOKEN</code>
+              <Copy>WHATSAPP_ACCESS_TOKEN</Copy>
               <span>مفتاح System User دائم</span>
-              <code>WHATSAPP_PHONE_NUMBER_ID</code>
+              <Copy>WHATSAPP_PHONE_NUMBER_ID</Copy>
               <span>معرّف الرقم</span>
-              <code>WHATSAPP_WABA_ID</code>
+              <Copy>WHATSAPP_WABA_ID</Copy>
               <span>معرّف حساب الأعمال</span>
-              <code>META_APP_SECRET</code>
+              <Copy>META_APP_SECRET</Copy>
               <span>يتحقق إن الرسائل من Meta</span>
-              <code>WEBHOOK_VERIFY_TOKEN</code>
+              <Copy>WEBHOOK_VERIFY_TOKEN</Copy>
               <span>أي نص تختاره</span>
             </div>
           </section>
