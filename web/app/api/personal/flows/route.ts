@@ -3,7 +3,7 @@ import { target, targets } from "@/lib/inbox";
 import { isPaired, MemoryRawKV } from "@/lib/wa/auth";
 import { aiFromEnv, aiStatus, DEFAULT_MODEL, DEFAULT_REPLY_PROMPT } from "@/lib/flows/ai";
 import { testFlow, type Channel } from "@/lib/flows/engine";
-import { deleteFlow, isPaused, listFlows, readLog, reorderFlows, saveFlow, setPaused } from "@/lib/flows/storage";
+import { deleteFlow, deleteWait, isPaused, listFlows, listWaits, readLog, reorderFlows, saveFlow, setPaused } from "@/lib/flows/storage";
 import { FIELDS, FlowInput, OPS, type Flow } from "@/lib/flows/types";
 
 export const dynamic = "force-dynamic";
@@ -62,7 +62,7 @@ export async function DELETE(req: Request) {
   return Response.json({ deleted: true });
 }
 
-// { op: "pause", paused } | { op: "reorder", ids } | { op: "test", flow, sample, useAi } | { op: "replay", run, useAi }
+// { op: "pause", paused } | { op: "reorder", ids } | { op: "test", flow, sample, useAi } | { op: "replay", run, useAi } | { op: "cancel_wait", account, id }
 export async function POST(req: Request) {
   const a = await admin(req);
   if (a instanceof Response) return a;
@@ -106,6 +106,15 @@ export async function POST(req: Request) {
       }
     }
     return err("Run not found. It may have expired from the log.", 404);
+  }
+  // { op: "cancel_wait", account, id }: drops a run that is waiting at a delay node, so its later steps never run.
+  if (b.op === "cancel_wait") {
+    const t = await target(a, String(b.account ?? ""));
+    if (!t) return err("Unknown number.", 404);
+    const id = String(b.id ?? "");
+    if (!(await listWaits(t.state)).some((w) => w.id === id)) return err("This waiting run is gone: it already continued, expired or was cancelled.", 404);
+    await deleteWait(t.state, id);
+    return Response.json({ cancelled: true });
   }
   if (b.op === "test") {
     const parsed = FlowInput.safeParse(b.flow);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { MemoryKV, Store, type StoredMessage } from "./store";
 import { MemoryRawKV } from "./wa/auth";
 import { buildOverview, type OverviewAccount } from "./overview";
-import { pushLog, saveDraft } from "./flows/storage";
+import { pushLog, saveDraft, saveWait } from "./flows/storage";
 import type { LogEntry } from "./flows/types";
 
 const NOW = Date.UTC(2026, 5, 1, 12, 30, 0); // 12:30 UTC
@@ -76,4 +76,21 @@ test("overview: numbers keep their pairing state and an empty account is all zer
   assert.equal(o.accounts[0].lastSync, null);
   assert.deepEqual([o.totals.messagesIn, o.totals.messagesOut, o.totals.activeChats, o.totals.drafts, o.totals.aiUsed], [0, 0, 0, 0, 0]);
   assert.equal(o.hourly.every((h) => h.in === 0 && h.out === 0), true);
+});
+
+test("overview: runs waiting at a delay are counted per number and listed soonest first with the flow name", async () => {
+  const a = account("main", "الرئيسي");
+  const b = account("work", "الشغل");
+  await a.store.setName("a@s.whatsapp.net", "سارة");
+  const w = (flow: string, at: number, extra: object = {}) => ({ flow, node: "w", chat: "a@s.whatsapp.net", resumeAt: at, cancelOnReply: false, vars: {}, ...extra });
+  await saveWait(a.state, w("f1", NOW + 2 * HOUR, { cancelOnReply: true }));
+  await saveWait(a.state, w("f1", NOW - 5 * 60_000)); // already due: waiting for the next sync
+  await saveWait(b.state, w("gone", NOW + HOUR));
+  const o = await buildOverview([a, b], NOW, new Map([["f1", "متابعة العملاء"]]));
+  assert.equal(o.totals.waiting, 3);
+  assert.equal(o.accounts.find((x) => x.id === "main")?.waiting, 2);
+  assert.deepEqual(o.waits.map((x) => [x.flowName, x.accountLabel]), [["متابعة العملاء", "الرئيسي"], ["gone", "الشغل"], ["متابعة العملاء", "الرئيسي"]]);
+  assert.equal(o.waits[0].resumeAt < NOW, true, "the overdue one is first");
+  assert.equal(o.waits[2].cancelOnReply, true);
+  assert.equal(o.waits[0].chatName, "سارة");
 });
