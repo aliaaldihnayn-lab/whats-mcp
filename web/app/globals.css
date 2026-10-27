@@ -68,7 +68,7 @@ p code, li code, td code { background: var(--paper-2); padding: 1px 6px; border-
 .top nav a:hover { color: var(--ink); }
 
 /* ---------- hero ---------- */
-.hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: clamp(28px, 5vw, 72px); align-items: center; padding: clamp(28px, 6vw, 72px) 0 clamp(48px, 8vw, 96px); }
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: clamp(28px, 5vw, 72px); align-items: center; padding: clamp(28px, 6vw, 72px) 0 clamp(48px, 8vw, 96px); }
 .hero h1 { font-family: var(--display); font-weight: 700; font-size: clamp(40px, 6.4vw, 76px); line-height: 1.12; margin: 0 0 22px; letter-spacing: -0.01em; }
 .hero .lede { font-size: clamp(18px, 1.6vw, 20px); color: var(--muted); max-width: 34ch; margin: 0 0 32px; }
 .actions { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -113,7 +113,7 @@ h3 { font-family: var(--display); font-weight: 500; font-size: 24px; margin: 0 0
 .table-scroll { overflow-x: auto; }
 
 /* modes */
-.mode { display: grid; grid-template-columns: 1fr 1.15fr; gap: clamp(24px, 5vw, 64px); }
+.mode { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: clamp(24px, 5vw, 64px); }
 .steps { list-style: none; counter-reset: s; margin: 0; padding: 0; }
 .steps li { counter-increment: s; position: relative; padding: 0 52px 26px 0; max-width: var(--measure); }
 .steps li::before { content: counter(s, arabic-indic); position: absolute; inset-inline-start: 0; top: -2px; width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font: 700 17px var(--display); display: grid; place-items: center; }
@@ -289,3 +289,9 @@ select { padding-inline-end: 28px; }
 .feature ul { margin: 8px 0 0; padding-inline-start: 18px; color: var(--muted); font-size: 0.93rem; }
 .badge { display: inline-block; background: var(--accent); color: var(--accent-ink); border-radius: 99px; padding: 0 10px; font-size: 0.78rem; font-weight: 500; margin-inline-start: 8px; }
 h1, h2, h3 { font-family: var(--display); }
+
+.mode > *, .hero > *, .features > *, .risks > * { min-width: 0; }
+.code pre, .envs code { max-width: 100%; }
+.envs { grid-template-columns: max-content minmax(0, 1fr); }
+@media (max-width: 760px) { .envs { grid-template-columns: 1fr; } .compare { min-width: 640px; } }
+.code pre { padding-right: 64px; }
