@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { Code } from "@/components/Code";
 import { Mark } from "@/components/Mark";
 import { Secrets } from "@/components/Secrets";
+import { origin as getOrigin } from "@/lib/origin";
 
 export const metadata = { title: "دليل الإعداد الكامل | واتساب MCP", description: "كل خطوات التثبيت والربط: فيرسل، قاعدة البيانات، مفاتيح الذكاء الاصطناعي، واتساب، Claude، الفلوات والمساعد." };
 
@@ -28,7 +29,10 @@ const PROVIDERS: [string, string][] = [
   ["OpenRouter (يجمع عدة نماذج)", "https://openrouter.ai/api/v1"],
 ];
 
-export default function Guide() {
+export const dynamic = "force-dynamic";
+
+export default async function Guide() {
+  const origin = await getOrigin();
   return (
     <div className="wrap">
       <header className="top">
@@ -140,8 +144,9 @@ export default function Guide() {
             <li><strong>أنشئ مفتاح جهاز</strong><p>في <code>/personal</code> ← المفاتيح: سمّه، اختر الأرقام، واختر قراءة فقط أو قراءة وإرسال. المفتاح يظهر مرة وحدة.</p></li>
             <li><strong>انسخ الرابط الجاهز واستخدمه حسب برنامجك</strong><p>الرابط يحتوي المفتاح، فعامله ككلمة سر.</p></li>
           </ol>
-          <Code label="Claude Code">{`claude mcp add --transport http whatsapp "https://YOUR-APP.vercel.app/api/personal/mcp?key=wmk_..."`}</Code>
-          <Code label="Cursor و أغلب البرامج">{`{ "mcpServers": { "whatsapp": { "type": "http", "url": "https://YOUR-APP.vercel.app/api/personal/mcp?key=wmk_..." } } }`}</Code>
+          <Code label="Claude Code">{`claude mcp add --transport http whatsapp "${origin}/api/personal/mcp?key=wmk_..."`}</Code>
+          <Code label="Cursor و أغلب البرامج">{`{ "mcpServers": { "whatsapp": { "type": "http", "url": "${origin}/api/personal/mcp?key=wmk_..." } } }`}</Code>
+          <Code label="رابط نسختك لـ Claude.ai (الصقه في الموصل المخصص)">{`${origin}/api/personal/mcp?key=wmk_...`}</Code>
           <p>
             <strong>Claude.ai / تطبيق Claude:</strong> الإعدادات ← الموصلات (Connectors) ← إضافة موصل مخصص، والصق الرابط. إن ظهر خطأ تسجيل، تأكد من تعطيل حماية Vercel وإن الرابط فيه <code>?key=</code> صحيح.
           </p>
@@ -169,7 +174,7 @@ export default function Guide() {
         <section aria-labelledby="s8">
           <h2 id="s8">8. المزامنة والسرعة</h2>
           <p>على Hobby تشتغل المزامنة المجدولة مرة باليوم. الفلوات تشتغل أيضاً عند كل طلب من Claude. لو تبي ردود أسرع، اربط خدمة نبض مجانية (مثل cron-job.org) تستدعي كل 5 دقائق:</p>
-          <Code label="رابط النبض">{`https://YOUR-APP.vercel.app/api/cron/sync?key=YOUR_CRON_SECRET`}</Code>
+          <Code label="رابط النبض">{`${origin}/api/cron/sync?key=YOUR_CRON_SECRET`}</Code>
         </section>
 
         <section aria-labelledby="s9">

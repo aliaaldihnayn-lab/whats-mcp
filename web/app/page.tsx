@@ -1,6 +1,7 @@
 import { Code } from "@/components/Code";
 import { Mark, Seal } from "@/components/Mark";
 import { Secrets } from "@/components/Secrets";
+import { origin as getOrigin } from "@/lib/origin";
 
 const REPO = "https://github.com/aliaaldihnayn-lab/whats-mcp";
 const RAW = "https://raw.githubusercontent.com/aliaaldihnayn-lab/whats-mcp/main";
@@ -31,7 +32,10 @@ const FEATURES: { title: string; text: string; items?: string[]; badge?: string 
   { title: "الربط الرسمي", text: "لرقم الأعمال عبر Cloud API من Meta: قوالب، أزرار، ونافذة الـ24 ساعة. مع نفس الفلوات والإنبوكس." },
 ];
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const origin = await getOrigin();
   return (
     <>
       <div className="wrap">
@@ -151,7 +155,7 @@ export default function Home() {
                   <a className="btn solid" href={DEPLOY_URL}>انشر نسختك على Vercel</a>{" "}
                   <a className="btn ghost" href="/personal">افتح النظام</a>
                 </p>
-                <Code label="الرابط الجاهز لمساعدك (تنسخه من لوحة التحكم)">{`https://YOUR-APP.vercel.app/api/personal/mcp?key=wmk_…`}</Code>
+                <Code label="الرابط الجاهز لمساعدك (تنسخه من لوحة التحكم)">{`${origin}/api/personal/mcp?key=wmk_…`}</Code>
                 <div className="note">
                   <p>
                     مع كل طلب تتصل النسخة لثواني وتسحب الجديد، فالطلب ياخذ 5 إلى 20 ثانية. على Vercel المجاني تشتغل المزامنة المجدولة مرة باليوم، ولردود أسرع اربط خدمة نبض خارجية (التفاصيل في الدليل).
