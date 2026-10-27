@@ -10,6 +10,7 @@ import { FlowBuilder } from "./FlowBuilder";
 import { downloadJson, fileSafe } from "./download";
 import { STATUS_LABEL, fmtMs } from "./RunDetail";
 import { ACTION_LABEL, PRESETS, blankFlow, type ActionType, type EF } from "./presets";
+import { Select } from "../Select";
 
 type Account = { id: string; label: string; kind: "personal" | "official" };
 type Log = { id?: string; ms?: number; t: number; account: string; accountLabel?: string; flow: string; name: string; chat: string; chatName?: string; text?: string; status: string; note?: string; actions: { type: string; ok: boolean; detail?: string }[] };
@@ -201,14 +202,14 @@ function LogTable({ log, flows }: { log: Log[]; flows: Flow[] }) {
   return (
     <>
       <div className="log-filters">
-        <select aria-label="الحالة" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <Select aria-label="الحالة" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">كل الحالات</option>
           {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <select aria-label="الفلو" value={flow} onChange={(e) => setFlow(e.target.value)}>
+        </Select>
+        <Select aria-label="الفلو" value={flow} onChange={(e) => setFlow(e.target.value)}>
           <option value="">كل الفلوات</option>
           {flows.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
+        </Select>
         <input aria-label="بحث" placeholder="ابحث في الرسالة أو المحادثة" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="muted small">{rows.length} من {log.length}</span>
       </div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { call, errMsg, invalidate, useApi, useSession, type Status } from "../shared";
+import { Select } from "../Select";
 
 type Chat = { waId: string; name?: string; lastAt: number; last?: { text: string; direction: "in" | "out"; type: string }; group: boolean; windowOpen?: boolean; tags: string[]; drafts: number };
 type Msg = { id: string; waId: string; direction: "in" | "out"; type: string; text?: string; caption?: string; filename?: string; timestamp: number; status?: string; replyTo?: string; sender?: string; senderName?: string; reaction?: { emoji: string } };
@@ -175,9 +176,9 @@ function App({ secret, status }: { secret: string; status: Status }) {
       <div className={`inbox${open && tab === "chats" ? " show-thread" : ""}`}>
         <aside className="side">
           <div className="tools">
-            <select aria-label="الرقم" value={account} onChange={(e) => (setAccount(e.target.value), setActive(null))}>
+            <Select aria-label="الرقم" value={account} onChange={(e) => (setAccount(e.target.value), setActive(null))}>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-            </select>
+            </Select>
             <input aria-label="بحث" placeholder="ابحث بالاسم أو الرقم" value={q} onChange={(e) => setQ(e.target.value)} />
             <div className="row">
               <button type="button" className={`btn small ${tab === "chats" ? "solid" : "ghost"}`} onClick={() => setTab("chats")}>المحادثات</button>
