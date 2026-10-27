@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Nav, SecretGate, call, errMsg, type Status } from "../shared";
+import { call, errMsg, invalidate, useApi, useSession, type Status } from "../shared";
 
 type Chat = { waId: string; name?: string; lastAt: number; last?: { text: string; direction: "in" | "out"; type: string }; group: boolean; windowOpen?: boolean; tags: string[]; drafts: number };
 type Msg = { id: string; waId: string; direction: "in" | "out"; type: string; text?: string; caption?: string; filename?: string; timestamp: number; status?: string; replyTo?: string; sender?: string; senderName?: string; reaction?: { emoji: string } };
@@ -18,24 +18,18 @@ function short(sec: number) {
   return d.toDateString() === today.toDateString() ? d.toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString("ar", { day: "numeric", month: "short" });
 }
 
+type Thread = { name?: string; tags: string[]; messages: Msg[]; window?: { windowOpen: boolean } };
+
 export function Inbox() {
-  return (
-    <div className="dash-page">
-      <Nav current="inbox" />
-      <SecretGate>{(secret, status) => <App secret={secret} status={status} />}</SecretGate>
-    </div>
-  );
+  const { secret, status } = useSession();
+  return <App secret={secret} status={status} />;
 }
 
 function App({ secret, status }: { secret: string; status: Status }) {
   const [account, setAccount] = useState("main");
-  const [accounts, setAccounts] = useState<Account[]>(status.accounts.map((a) => ({ id: a.id, label: a.label, kind: "personal" })));
-  const [kind, setKind] = useState<"personal" | "official">("personal");
   const [q, setQ] = useState("");
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [dq, setDq] = useState("");
   const [active, setActive] = useState<string | null>(null);
-  const [thread, setThread] = useState<{ name?: string; tags: string[]; messages: Msg[]; window?: { windowOpen: boolean } } | null>(null);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
   const [tab, setTab] = useState<"chats" | "drafts">("chats");
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<Msg | null>(null);
@@ -46,55 +40,34 @@ function App({ secret, status }: { secret: string; status: Status }) {
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
+  useEffect(() => {
+    const t = setTimeout(() => setDq(q), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  // Cached and polled gently: the cache refreshes whenever a sync, flow or MCP call stores something.
+  const chatsApi = useApi<{ chats: Chat[]; accounts: Account[]; kind: "personal" | "official" }>(`/api/personal/inbox?account=${account}&q=${encodeURIComponent(dq)}`, { fresh: 10_000, poll: 20_000 });
+  const draftsApi = useApi<{ drafts: Draft[] }>("/api/personal/drafts", { poll: 20_000 });
+  const threadApi = useApi<Thread>(active ? `/api/personal/inbox?account=${account}&view=messages&chat=${encodeURIComponent(active)}` : null, { fresh: 5_000, poll: 20_000 });
+  const chats = chatsApi.data?.chats ?? [];
+  const accounts = chatsApi.data?.accounts ?? status.accounts.map((a): Account => ({ id: a.id, label: a.label, kind: "personal" }));
+  const kind = chatsApi.data?.kind ?? "personal";
+  const drafts = draftsApi.data?.drafts ?? [];
+  const thread = threadApi.data ?? null;
+
   const say = useCallback((t: string) => {
     setToast(t);
     setTimeout(() => setToast((x) => (x === t ? "" : x)), 4000);
   }, []);
 
   const loadChats = useCallback(async () => {
-    try {
-      const d = await call<{ chats: Chat[]; accounts: Account[]; kind: "personal" | "official" }>(secret, `/api/personal/inbox?account=${account}&q=${encodeURIComponent(q)}`);
-      setChats(d.chats);
-      setAccounts(d.accounts);
-      setKind(d.kind);
-      const dr = await call<{ drafts: Draft[] }>(secret, "/api/personal/drafts");
-      setDrafts(dr.drafts);
-    } catch (e) {
-      say(errMsg(e));
-    }
-  }, [secret, account, q, say]);
-
-  const loadThread = useCallback(
-    async (chat: string) => {
-      try {
-        const d = await call<any>(secret, `/api/personal/inbox?account=${account}&view=messages&chat=${encodeURIComponent(chat)}`);
-        setThread(d);
-      } catch (e) {
-        say(errMsg(e));
-      }
-    },
-    [secret, account, say],
-  );
+    await Promise.all([chatsApi.reload(), draftsApi.reload()]);
+  }, [chatsApi.reload, draftsApi.reload]);
+  const loadThread = (_chat?: string) => threadApi.reload();
 
   useEffect(() => {
-    const t = setTimeout(loadChats, q ? 250 : 0);
-    return () => clearTimeout(t);
-  }, [loadChats, q]);
-
-  useEffect(() => {
-    if (active) void loadThread(active);
-    else setThread(null);
-  }, [active, loadThread]);
-
-  // The cache refreshes whenever a sync, flow or MCP call stores something; poll it gently.
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      void loadChats();
-      if (active) void loadThread(active);
-    }, 20000);
-    return () => clearInterval(t);
-  }, [loadChats, loadThread, active]);
+    if (chatsApi.error) say(chatsApi.error);
+  }, [chatsApi.error, say]);
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
@@ -112,20 +85,36 @@ function App({ secret, status }: { secret: string; status: Status }) {
     }
   };
 
-  const send = (e: React.FormEvent) => {
+  const send = async (e: React.FormEvent) => {
     e.preventDefault();
     const to = active ?? newTo;
-    if (!text.trim() || !to) return;
-    void act("send", async () => {
-      await call(secret, "/api/personal/inbox", { body: { op: "send", account, chat: to, text, replyTo: replyTo?.id } });
-      setText("");
-      setReplyTo(null);
-      stick.current = true;
-      if (!active) {
-        setNewTo("");
-        await loadChats();
-      } else await loadThread(active);
-    });
+    const body = text.trim();
+    if (!body || !to) return;
+    const reply = replyTo;
+    // Show the message at once; the server answer replaces it, a failure puts the text back.
+    if (active) {
+      threadApi.set((prev) => ({
+        ...(prev ?? { tags: [], messages: [] }),
+        messages: [...(prev?.messages ?? []), { id: `tmp-${Date.now()}`, waId: to, direction: "out", type: "text", text: body, timestamp: Math.floor(Date.now() / 1000), status: "sending", replyTo: reply?.id }],
+      }));
+    }
+    setText("");
+    setReplyTo(null);
+    stick.current = true;
+    setBusy("send");
+    try {
+      await call(secret, "/api/personal/inbox", { body: { op: "send", account, chat: to, text: body, replyTo: reply?.id } });
+      invalidate("/api/personal/inbox");
+      if (!active) setNewTo("");
+      await Promise.all([loadChats(), active ? loadThread(active) : undefined]);
+    } catch (err) {
+      setText(body);
+      setReplyTo(reply);
+      say(errMsg(err));
+      if (active) await loadThread(active);
+    } finally {
+      setBusy("");
+    }
   };
 
   const sync = () =>
@@ -179,7 +168,8 @@ function App({ secret, status }: { secret: string; status: Status }) {
           </div>
           {tab === "chats" ? (
             <ul className="chatlist">
-              {chats.length === 0 && <li className="empty">ما فيه محادثات محفوظة بعد. اضغط "زامن" أو انتظر رسالة جديدة.</li>}
+              {!chatsApi.data && Array.from({ length: 7 }, (_, i) => <li key={i} style={{ padding: "14px 16px" }}><div className="skel" style={{ height: 44 }} /></li>)}
+              {chatsApi.data && chats.length === 0 && <li className="empty">ما فيه محادثات محفوظة بعد. اضغط "زامن" أو انتظر رسالة جديدة.</li>}
               {chats.map((c) => (
                 <li key={c.waId}>
                   <button type="button" aria-current={active === c.waId} onClick={() => (stick.current = true, setActive(c.waId), setTab("chats"))}>
@@ -242,7 +232,7 @@ function App({ secret, status }: { secret: string; status: Status }) {
                       {["image", "video", "audio", "document", "sticker"].includes(m.type) && <div className="muted">[{m.type}{m.filename ? `: ${m.filename}` : ""}]</div>}
                       <div className="meta">
                         <time>{new Date(m.timestamp * 1000).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
-                        {m.direction === "out" && m.status && <span>{m.status === "read" ? "✓✓ قُرئت" : m.status === "delivered" ? "✓✓" : m.status === "failed" ? "فشل" : "✓"}</span>}
+                        {m.direction === "out" && m.status && <span>{m.status === "read" ? "✓✓ قُرئت" : m.status === "delivered" ? "✓✓" : m.status === "failed" ? "فشل" : m.status === "sending" ? "…" : "✓"}</span>}
                         <span className="acts">
                           <button type="button" title="رد" onClick={() => setReplyTo(m)}>↩</button>
                           {EMOJIS.map((e) => <button type="button" key={e} title={`تفاعل ${e}`} onClick={() => react(m, e)}>{e}</button>)}
@@ -251,6 +241,7 @@ function App({ secret, status }: { secret: string; status: Status }) {
                     </div>
                   );
                 })}
+                {!thread && <div className="skel" style={{ height: 120 }} />}
                 <div ref={bottom} />
               </div>
               {here.length > 0 && (

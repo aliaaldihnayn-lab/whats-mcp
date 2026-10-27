@@ -1,4 +1,5 @@
-// What a flow is: a trigger, optional conditions, and a list of actions.
+// What a flow is: a trigger, optional conditions, and a list of actions, or (new) a graph of
+// nodes where condition nodes branch into "true" and "false". Old linear flows keep working.
 // Everything here is validated with zod, because flows come from the dashboard.
 
 import { z } from "zod";
@@ -88,24 +89,72 @@ export const Trigger = z.discriminatedUnion("type", [
 ]);
 export type Trigger = z.infer<typeof Trigger>;
 
-export const FlowInput = z.object({
-  id: z.string().regex(/^[a-z0-9-]{4,40}$/).optional(),
-  name: z.string().trim().min(1).max(80),
-  enabled: z.boolean().default(true),
-  /** "*" = every number, otherwise one account id (or "official"). */
-  account: z.string().min(1).max(30).default("*"),
-  trigger: Trigger.default({ type: "message", direction: "in", chats: "direct" }),
-  match: z.enum(["all", "any"]).default("all"),
-  conditions: z.array(Cond).max(20).default([]),
-  actions: z.array(Action).min(1).max(10),
-  /** approve = text sends wait in the drafts list; auto = sent at once; dry = only logged. */
-  mode: z.enum(["auto", "approve", "dry"]).default("approve"),
-  maxAgeMinutes: z.number().int().min(1).max(10080).default(180),
-  cooldownSeconds: z.number().int().min(0).max(604800).default(0),
-  maxPerHour: z.number().int().min(1).max(1000).default(30),
-  stopOnMatch: z.boolean().default(false),
-  tz: z.string().max(60).refine(validTz, "unknown time zone").default("Asia/Riyadh"),
-});
+
+// ---------- graph (node editor) ----------
+
+const NodeId = z.string().regex(/^[A-Za-z0-9_-]{1,24}$/);
+const pos = { x: z.number().min(-20000).max(20000).default(0), y: z.number().min(-20000).max(20000).default(0) };
+
+export const GraphNode = z.discriminatedUnion("kind", [
+  /** the trigger's settings live in `flow.trigger`; this node is its place on the canvas */
+  z.object({ id: NodeId, kind: z.literal("trigger"), ...pos }),
+  z.object({ id: NodeId, kind: z.literal("condition"), ...pos, match: z.enum(["all", "any"]).default("all"), conditions: z.array(Cond).min(1).max(10) }),
+  z.object({ id: NodeId, kind: z.literal("action"), ...pos, action: Action }),
+]);
+export type GraphNode = z.infer<typeof GraphNode>;
+
+export const PORTS = ["next", "true", "false"] as const;
+export const GraphEdge = z.object({ from: NodeId, port: z.enum(PORTS).default("next"), to: NodeId });
+export type GraphEdge = z.infer<typeof GraphEdge>;
+
+export const Graph = z
+  .object({ nodes: z.array(GraphNode).min(2).max(40), edges: z.array(GraphEdge).max(80) })
+  .superRefine((g, ctx) => {
+    const bad = (message: string) => ctx.addIssue({ code: "custom", message });
+    const kind = new Map<string, GraphNode["kind"]>();
+    for (const n of g.nodes) {
+      if (kind.has(n.id)) bad(`duplicate node id "${n.id}"`);
+      kind.set(n.id, n.kind);
+    }
+    if (g.nodes.filter((n) => n.kind === "trigger").length !== 1) bad("a flow needs exactly one trigger node");
+    if (!g.nodes.some((n) => n.kind === "action")) bad("a flow needs at least one action node");
+    const seen = new Set<string>();
+    for (const e of g.edges) {
+      const from = kind.get(e.from);
+      if (!from || !kind.has(e.to)) bad("a wire points at a node that does not exist");
+      else if (kind.get(e.to) === "trigger") bad("nothing can lead into the trigger");
+      else if (e.from === e.to) bad("a node cannot be wired to itself");
+      else if ((from === "condition") !== (e.port !== "next")) bad(from === "condition" ? "condition nodes wire from the true or false output" : "only condition nodes have true and false outputs");
+      const key = `${e.from}:${e.port}:${e.to}`;
+      if (seen.has(key)) bad("the same wire appears twice");
+      seen.add(key);
+    }
+  });
+export type Graph = z.infer<typeof Graph>;
+
+export const FlowInput = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{4,40}$/).optional(),
+    name: z.string().trim().min(1).max(80),
+    enabled: z.boolean().default(true),
+    /** "*" = every number, otherwise one account id (or "official"). */
+    account: z.string().min(1).max(30).default("*"),
+    trigger: Trigger.default({ type: "message", direction: "in", chats: "direct" }),
+    match: z.enum(["all", "any"]).default("all"),
+    conditions: z.array(Cond).max(20).default([]),
+    /** linear flows only; graph flows keep their actions inside the graph */
+    actions: z.array(Action).max(10).default([]),
+    /** present = run the node graph instead of `conditions` + `actions` */
+    graph: Graph.optional(),
+    /** approve = text sends wait in the drafts list; auto = sent at once; dry = only logged. */
+    mode: z.enum(["auto", "approve", "dry"]).default("approve"),
+    maxAgeMinutes: z.number().int().min(1).max(10080).default(180),
+    cooldownSeconds: z.number().int().min(0).max(604800).default(0),
+    maxPerHour: z.number().int().min(1).max(1000).default(30),
+    stopOnMatch: z.boolean().default(false),
+    tz: z.string().max(60).refine(validTz, "unknown time zone").default("Asia/Riyadh"),
+  })
+  .refine((f) => f.graph || f.actions.length > 0, { path: ["actions"], message: "needs at least one action" });
 export type FlowInput = z.infer<typeof FlowInput>;
 /** What the dashboard sends: defaults not filled in yet. */
 export type FlowDraft = z.input<typeof FlowInput>;

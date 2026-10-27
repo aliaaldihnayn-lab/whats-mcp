@@ -1,5 +1,4 @@
 import { headers } from "next/headers";
-import { Mark } from "@/components/Mark";
 import { LinkPanel } from "./LinkPanel";
 
 export const dynamic = "force-dynamic";
@@ -9,15 +8,8 @@ export default async function Personal() {
   const h = await headers();
   const origin = `https://${h.get("x-forwarded-host") ?? h.get("host") ?? "your-app.vercel.app"}`;
   return (
-    <div className="wrap wide">
-      <header className="top">
-        <a className="mark" href="/">
-          <Mark />
-          واتساب MCP
-        </a>
-      </header>
-      <main>
-        <section style={{ borderTop: 0, paddingTop: 16 }}>
+    <>
+      <section>
           <h2>اربط حسابك الشخصي</h2>
           <p className="intro">
             نسختك على فيرسل تنضاف كـ "جهاز مرتبط" مثل واتساب ويب، ولك أكثر من رقم لو تبي. ما تبقى متصلة طول الوقت: تتصل لثواني مع كل طلب أو مزامنة، تسحب الرسائل الجديدة، تشغّل فلواتك، وتقفل.
@@ -29,7 +21,6 @@ export default async function Personal() {
             </p>
           </div>
         </section>
-      </main>
-    </div>
+    </>
   );
 }

@@ -18,6 +18,7 @@
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
     "@upstash/redis": "^1.40.0",
+    "@xyflow/react": "^12.12.0",
     "baileys": "^7.0.0-rc14",
     "mammoth": "^1.13.0",
     "mcp-handler": "^2.3.0",

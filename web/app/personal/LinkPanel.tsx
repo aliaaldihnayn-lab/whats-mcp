@@ -1,18 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Nav, SecretGate, call, errMsg, phoneOf, useCopy, when, type Status } from "./shared";
+import { useState } from "react";
+import { call, errMsg, invalidate, phoneOf, useApi, useCopy, useSession, when, type Status } from "./shared";
 
 type Key = { id: string; label: string; accounts: string[] | "*"; scope: "read" | "full"; createdAt: number; lastUsed?: number };
 type Created = { token: string; url: string; label: string; accounts: string[] | "*"; scope: "read" | "full" };
 
 export function LinkPanel({ origin }: { origin: string }) {
-  return (
-    <div className="dash-page">
-      <Nav current="link" />
-      <SecretGate>{(secret, status, reload) => <Home secret={secret} status={status} reload={reload} origin={origin} />}</SecretGate>
-    </div>
-  );
+  const { secret, status, reload } = useSession();
+  return <Home secret={secret} status={status} reload={reload} origin={origin} />;
 }
 
 function Home({ secret, status, reload, origin }: { secret: string; status: Status; reload: () => Promise<void>; origin: string }) {
@@ -225,7 +221,8 @@ function PairForm({ secret, account, onDone }: { secret: string; account: string
 // ---------- device keys ----------
 
 function Keys({ secret, status, origin }: { secret: string; status: Status; origin: string }) {
-  const [keys, setKeys] = useState<Key[]>([]);
+  const keysApi = useApi<{ keys: Key[] }>("/api/personal/keys", { fresh: 30_000 });
+  const keys = keysApi.data?.keys ?? [];
   const [label, setLabel] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [readOnly, setReadOnly] = useState(false);
@@ -233,10 +230,10 @@ function Keys({ secret, status, origin }: { secret: string; status: Status; orig
   const [error, setError] = useState("");
   const { copied, copy } = useCopy();
 
-  const load = () => call<{ keys: Key[] }>(secret, "/api/personal/keys").then((d) => setKeys(d.keys), (e) => setError(errMsg(e)));
-  useEffect(() => {
-    void load();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = async () => {
+    invalidate("/api/personal/keys");
+    await keysApi.reload();
+  };
 
   const names = (k: Key["accounts"]) => (k === "*" ? "كل الأرقام" : k.map((id) => status.accounts.find((a) => a.id === id)?.label ?? id).join("، "));
 
@@ -260,7 +257,7 @@ function Keys({ secret, status, origin }: { secret: string; status: Status; orig
     await load();
   }
 
-  const claudeCode = created ? `claude mcp add --transport http whatsapp "${created.url}"` : "";
+  const cliCmd = created ? `claude mcp add --transport http whatsapp "${created.url}"` : "";
   const json = created ? `{ "mcpServers": { "whatsapp": { "type": "http", "url": "${created.url}" } } }` : "";
 
   return (
@@ -296,12 +293,12 @@ function Keys({ secret, status, origin }: { secret: string; status: Status; orig
           </p>
           <p className="label">الرابط (للتطبيقات اللي تطلب رابط فقط)</p>
           <div className="code"><pre dir="ltr">{created.url}</pre><button type="button" className="copy" onClick={() => copy(created.url, "url")}>{copied === "url" ? "تم النسخ" : "انسخ"}</button></div>
-          <p className="label">Claude Code (أمر واحد)</p>
-          <div className="code"><pre dir="ltr">{claudeCode}</pre><button type="button" className="copy" onClick={() => copy(claudeCode, "cc")}>{copied === "cc" ? "تم النسخ" : "انسخ"}</button></div>
+          <p className="label">سطر أوامر Claude Code (أمر واحد)</p>
+          <div className="code"><pre dir="ltr">{cliCmd}</pre><button type="button" className="copy" onClick={() => copy(cliCmd, "cc")}>{copied === "cc" ? "تم النسخ" : "انسخ"}</button></div>
           <p className="label">Cursor / VS Code / ملف الإعدادات</p>
           <div className="code"><pre dir="ltr">{json}</pre><button type="button" className="copy" onClick={() => copy(json, "js")}>{copied === "js" ? "تم النسخ" : "انسخ"}</button></div>
           <p className="muted">
-            في تطبيق Claude: الإعدادات ← الموصلات ← إضافة موصل مخصص، والصق الرابط (اترك خانة OAuth فاضية). لتثبيت الرابط على رقم واحد أضف <code>&amp;account=رقم_المعرف</code> في آخره.
+            في أي تطبيق يدعم MCP (مثل Claude): الإعدادات ← الموصلات ← إضافة موصل مخصص، والصق الرابط (اترك خانة OAuth فاضية). لتثبيت الرابط على رقم واحد أضف <code>&amp;account=رقم_المعرف</code> في آخره.
           </p>
           <button className="btn ghost" type="button" onClick={() => setCreated(null)}>نسخت، اخفِ</button>
         </div>

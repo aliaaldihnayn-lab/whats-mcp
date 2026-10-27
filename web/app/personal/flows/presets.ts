@@ -1,4 +1,4 @@
-import type { Action, Cond, Trigger } from "@/lib/flows/types";
+import type { Action, Cond, Graph, Trigger } from "@/lib/flows/types";
 
 export type EF = {
   id?: string;
@@ -9,6 +9,8 @@ export type EF = {
   match: "all" | "any";
   conditions: Cond[];
   actions: Action[];
+  /** node graph; flows saved before the node editor have none and are converted when opened */
+  graph?: Graph;
   mode: "auto" | "approve" | "dry";
   maxAgeMinutes: number;
   cooldownSeconds: number;
@@ -22,7 +24,7 @@ export type ActionType = Action["type"];
 export const FIELD_LABEL: Record<string, string> = {
   text: "نص الرسالة", sender: "رقم المرسل", sender_name: "اسم المرسل", chat: "معرّف المحادثة", chat_name: "اسم المحادثة",
   chat_type: "نوع المحادثة (direct / group)", type: "نوع الرسالة (text / image / audio…)", has_media: "فيها ميديا", direction: "الاتجاه (in / out)",
-  from_owner: "الرسالة منك أنت", self_chat: "المحادثة مع نفسك", hour: "الساعة (0-23)", weekday: "اليوم (0 = الأحد)", is_first: "أول رسالة من هذا الشخص", is_reply: "رد على رسالة", length: "طول النص", tag: "وسوم المحادثة", ai: "Claude يحكم (سؤال نعم/لا)",
+  from_owner: "الرسالة منك أنت", self_chat: "المحادثة مع نفسك", hour: "الساعة (0-23)", weekday: "اليوم (0 = الأحد)", is_first: "أول رسالة من هذا الشخص", is_reply: "رد على رسالة", length: "طول النص", tag: "وسوم المحادثة", ai: "الذكاء الاصطناعي يحكم (سؤال نعم/لا)",
 };
 
 export const OP_LABEL: Record<string, string> = {
@@ -34,8 +36,8 @@ export const OP_LABEL: Record<string, string> = {
 export const NO_VALUE = new Set(["is_true", "is_false", "is_empty", "not_empty"]);
 
 export const ACTION_LABEL: Record<ActionType, string> = {
-  reply: "ردّ في نفس المحادثة", ai_reply: "Claude يرد في نفس المحادثة", send: "أرسل رسالة لرقم آخر (أو لي)", ai: "Claude يجهز نص (يُستخدم في {{ai}})",
-  agent: "Claude ينفذ مهمة بالموصلات (MCP)", react: "تفاعل بإيموجي", mark_read: "علّم كمقروءة", tag: "أضف وسم للمحادثة", webhook: "استدعِ رابط (Webhook)", stop: "أوقف باقي الفلوات لهذي الرسالة",
+  reply: "ردّ في نفس المحادثة", ai_reply: "الذكاء الاصطناعي يرد في نفس المحادثة", send: "أرسل رسالة لرقم آخر (أو لي)", ai: "الذكاء الاصطناعي يجهز نص (يُستخدم في {{ai}})",
+  agent: "الذكاء الاصطناعي ينفذ مهمة بالموصلات (MCP)", react: "تفاعل بإيموجي", mark_read: "علّم كمقروءة", tag: "أضف وسم للمحادثة", webhook: "استدعِ رابط (Webhook)", stop: "أوقف باقي الفلوات لهذي الرسالة",
 };
 
 export function newAction(type: ActionType): Action {
@@ -61,10 +63,10 @@ export const blankFlow = (): EF => ({
 export const PRESETS: { id: string; title: string; hint: string; make: () => EF }[] = [
   {
     id: "claude-all",
-    title: "Claude يرد على كل رسالة خاصة",
-    hint: "كل ما توصلك رسالة، Claude يقرأ المحادثة ويكتب الرد. يبدأ بوضع المسودة، وتحوله لتلقائي لما تثق فيه.",
+    title: "الذكاء الاصطناعي يرد على كل رسالة خاصة",
+    hint: "كل ما توصلك رسالة، الذكاء الاصطناعي يقرأ المحادثة ويكتب الرد. يبدأ بوضع المسودة، وتحوله لتلقائي لما تثق فيه.",
     make: () => ({
-      ...blankFlow(), name: "Claude يرد على الرسائل", cooldownSeconds: 20, maxPerHour: 20,
+      ...blankFlow(), name: "الذكاء الاصطناعي يرد على الرسائل", cooldownSeconds: 20, maxPerHour: 20,
       actions: [{ ...(newAction("ai_reply") as Extract<Action, { type: "ai_reply" }>), prompt: "" }],
     }),
   },
@@ -90,8 +92,8 @@ export const PRESETS: { id: string; title: string; hint: string; make: () => EF 
   },
   {
     id: "digest",
-    title: "ملخص يومي من Claude يوصلني",
-    hint: "كل يوم الساعة 8 صباحاً (أو أول مزامنة بعدها) يلخص Claude رسائل آخر 24 ساعة ويرسلها لك على واتساب.",
+    title: "ملخص يومي من الذكاء الاصطناعي يوصلني",
+    hint: "كل يوم الساعة 8 صباحاً (أو أول مزامنة بعدها) يلخص الذكاء الاصطناعي رسائل آخر 24 ساعة ويرسلها لك على واتساب.",
     make: () => ({
       ...blankFlow(), name: "ملخص يومي", mode: "auto", trigger: { type: "schedule", everyMinutes: 1440, atHour: 8 },
       actions: [
@@ -102,8 +104,8 @@ export const PRESETS: { id: string; title: string; hint: string; make: () => EF 
   },
   {
     id: "ai-tag",
-    title: "Claude يوسم الرسائل المهمة وينبهني",
-    hint: "لو Claude حكم إن الرسالة طلب مستعجل أو فاتورة، يوسمها ويكلم رابط (مثلاً ntfy أو Zapier).",
+    title: "الذكاء الاصطناعي يوسم الرسائل المهمة وينبهني",
+    hint: "لو الذكاء الاصطناعي حكم إن الرسالة طلب مستعجل أو فاتورة، يوسمها ويكلم رابط (مثلاً ntfy أو Zapier).",
     make: () => ({
       ...blankFlow(), name: "تنبيه الرسائل المستعجلة", mode: "auto",
       conditions: [{ field: "ai", op: "yes", value: "هل الرسالة طلب مستعجل أو مشكلة تحتاج تدخل صاحب الحساب شخصياً؟" }],
@@ -112,17 +114,17 @@ export const PRESETS: { id: string; title: string; hint: string; make: () => EF 
   },
   {
     id: "assistant",
-    title: "Claude داخل واتساب: أرسل له مهمة وينفذها",
-    hint: "اكتب مهمتك في محادثتك مع نفسك. Claude يرد بالخطة، وتقول \"نعم\" فينفذها بالموصلات اللي أضفتها، ويرسل لك النتيجة. فقط رسائلك أنت تُنفَّذ.",
+    title: "الذكاء الاصطناعي داخل واتساب: أرسل له مهمة وينفذها",
+    hint: "اكتب مهمتك في محادثتك مع نفسك. الذكاء الاصطناعي يرد بالخطة، وتقول \"نعم\" فينفذها بالموصلات اللي أضفتها، ويرسل لك النتيجة. فقط رسائلك أنت تُنفَّذ.",
     make: () => ({
-      ...blankFlow(), name: "مساعد Claude", mode: "auto", trigger: { type: "message", direction: "out", chats: "direct" }, maxAgeMinutes: 30, maxPerHour: 30,
+      ...blankFlow(), name: "مساعد الذكاء الاصطناعي", mode: "auto", trigger: { type: "message", direction: "out", chats: "direct" }, maxAgeMinutes: 30, maxPerHour: 30,
       conditions: [{ field: "self_chat", op: "is_true" }],
       actions: [newAction("agent")],
     }),
   },
   {
     id: "report",
-    title: "تقرير مجدول من Claude يوصلني (أو القروب)",
+    title: "تقرير مجدول من الذكاء الاصطناعي يوصلني (أو القروب)",
     hint: "مهمة بالموصلات تتنفذ بجدولة (مثلاً مبيعات المتجر كل صباح) والنتيجة تنرسل لك. غيّر \"me\" برقم أو معرّف قروب.",
     make: () => ({
       ...blankFlow(), name: "تقرير الصباح", mode: "auto", trigger: { type: "schedule", everyMinutes: 1440, atHour: 8 },
