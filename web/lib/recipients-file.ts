@@ -33,7 +33,9 @@ export type ParseOptions = {
   maxBytes?: number;
 };
 
-const DEFAULT_MAX_ROWS = 5_000;
+// A campaign's recipients and outcomes are each saved as one Redis value; 2,000 rows keep both well under
+// Upstash's 1 MB request limit. Larger lists go in as several campaigns, one after the other.
+const DEFAULT_MAX_ROWS = 2_000;
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 
 const PHONE_HEADERS = new Set(["phone", "mobile", "phone_number", "الجوال", "رقم_الجوال", "الهاتف", "رقم_الهاتف"]);
