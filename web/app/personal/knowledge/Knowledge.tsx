@@ -10,6 +10,9 @@ type Data = { docs: Doc[]; limits: { doc: number; total: number; docs: number };
 
 const KIND_LABEL: Record<Doc["kind"], string> = { url: "رابط", file: "ملف", text: "نص" };
 
+/** "5 آلاف حرف" reads at a glance; "5ك" did not. */
+const chars = (n: number) => (n < 1000 ? "أقل من ألف حرف" : `${Math.round(n / 1000).toLocaleString("ar-u-nu-latn")} ألف حرف`);
+
 export function Knowledge() {
   const { secret } = useSession();
   return <App secret={secret} />;
@@ -30,6 +33,7 @@ function App({ secret }: { secret: string }) {
   const [cn, setCn] = useState({ name: "", url: "", token: "" });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState("");
+  const [drag, setDrag] = useState(false);
 
   async function run(key: string, fn: () => Promise<unknown>, ok: string) {
     setBusy(key);
@@ -80,7 +84,7 @@ function App({ secret }: { secret: string }) {
         </div>
         {data && (
           <div className="stat" aria-label="المساحة المستخدمة">
-            <strong>{data.docs.length}</strong> مصدر · {Math.round(data.chars / 1000)}ك من {Math.round(data.limits.total / 1000)}ك حرف
+            <strong>{data.docs.length}</strong> مصدر · {Math.round(data.chars / 1000)} من {Math.round(data.limits.total / 1000)} ألف حرف
             <div className="meter"><span style={{ width: `${used}%` }} /></div>
           </div>
         )}
@@ -104,8 +108,23 @@ function App({ secret }: { secret: string }) {
 
           <section className="card">
             <h3>رفع ملف</h3>
-            <input type="file" multiple accept=".pdf,.docx,.md,.markdown,.txt,.csv,.json,.html,.htm" disabled={!!busy} onChange={(e) => { void upload(e.target.files); e.target.value = ""; }} />
-            <p className="hint">الحد 4MB للملف الواحد. للملفات الأكبر استخدم رابط.</p>
+            {/* our own drop zone: the browser's file button is English-only and can't be styled */}
+            <label
+              className={`dropzone${drag ? " over" : ""}${busy ? " busy" : ""}`}
+              onDragOver={(e) => (e.preventDefault(), setDrag(true))}
+              onDragLeave={() => setDrag(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDrag(false);
+                if (!busy) void upload(e.dataTransfer.files);
+              }}
+            >
+              <input type="file" className="sr" multiple accept=".pdf,.docx,.md,.markdown,.txt,.csv,.json,.html,.htm" disabled={!!busy} onChange={(e) => { void upload(e.target.files); e.target.value = ""; }} />
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4m0 0L8 8m4-4l4 4M5 20h14" /></svg>
+              <strong>{busy === "file" ? "نرفع الملف…" : "اختر ملفات أو اسحبها هنا"}</strong>
+              <span>PDF أو Word أو Markdown أو نص · حتى 4MB للملف</span>
+            </label>
+            <p className="hint">للملفات الأكبر استخدم رابط.</p>
           </section>
 
           <section className="card">
@@ -129,10 +148,10 @@ function App({ secret }: { secret: string }) {
                   </label>
                   <div className="grow">
                     <strong>{d.title}</strong>
-                    <span className="sub" dir="ltr">{d.kind === "text" ? "text" : d.source}</span>
+                    {d.kind === "text" ? <span className="sub">نص مكتوب</span> : <span className="sub" dir="ltr">{d.source}</span>}
                   </div>
                   <span className="tag">{KIND_LABEL[d.kind]}</span>
-                  <span className="tag">{Math.round(d.chars / 1000) || "<1"}ك</span>
+                  <span className="tag">{chars(d.chars)}</span>
                   {d.kind === "url" && <button className="btn ghost small" disabled={!!busy} onClick={() => run("refresh", () => post({ op: "refresh", id: d.id }), "تحدّث")}>تحديث</button>}
                   <button className="btn ghost small danger" disabled={!!busy} onClick={() => confirm(`حذف "${d.title}"؟`) && run("del", () => call(secret, `/api/personal/knowledge?id=${d.id}`, { method: "DELETE" }), "انحذف")}>حذف</button>
                 </li>
@@ -162,9 +181,9 @@ function App({ secret }: { secret: string }) {
               ))}
             </ul>
             <div className="grid2">
-              <input dir="ltr" aria-label="الاسم" placeholder="name (shop)" value={cn.name} onChange={(e) => setCn({ ...cn, name: e.target.value })} />
-              <input dir="ltr" aria-label="الرابط" placeholder="https://mcp.example.com/mcp" value={cn.url} onChange={(e) => setCn({ ...cn, url: e.target.value })} />
-              <input dir="ltr" type="password" aria-label="التوكن" placeholder="token (اختياري)" value={cn.token} onChange={(e) => setCn({ ...cn, token: e.target.value })} />
+              <label className="lf"><span>الاسم <small>(حروف إنجليزية وأرقام)</small></span><input dir="ltr" placeholder="shop" value={cn.name} onChange={(e) => setCn({ ...cn, name: e.target.value })} /></label>
+              <label className="lf"><span>رابط الخادم</span><input dir="ltr" placeholder="https://mcp.example.com/mcp" value={cn.url} onChange={(e) => setCn({ ...cn, url: e.target.value })} /></label>
+              <label className="lf"><span>التوكن <small>(اختياري)</small></span><input dir="ltr" type="password" value={cn.token} onChange={(e) => setCn({ ...cn, token: e.target.value })} /></label>
             </div>
             <button className="btn solid" disabled={!!busy || !cn.name || !cn.url} onClick={() => run("cadd", async () => { await call(secret, "/api/personal/connectors", { body: cn }); setCn({ name: "", url: "", token: "" }); }, "انضاف الموصل")}>إضافة موصل</button>
           </section>
