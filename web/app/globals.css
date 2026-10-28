@@ -116,7 +116,7 @@ h3 { font-family: var(--display); font-weight: 500; font-size: 24px; margin: 0 0
 .mode { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: clamp(24px, 5vw, 64px); }
 .steps { list-style: none; counter-reset: s; margin: 0; padding: 0; }
 .steps li { counter-increment: s; position: relative; padding: 0 52px 26px 0; max-width: var(--measure); }
-.steps li::before { content: counter(s, arabic-indic); position: absolute; inset-inline-start: 0; top: -2px; width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font: 700 17px var(--display); display: grid; place-items: center; }
+.steps li::before { content: counter(s); position: absolute; inset-inline-start: 0; top: -2px; width: 36px; height: 36px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font: 700 17px var(--display); display: grid; place-items: center; }
 .steps li:not(:last-child)::after { content: ""; position: absolute; inset-inline-start: 17px; top: 40px; bottom: 6px; width: 1.5px; background: var(--line); }
 .steps strong { display: block; font-weight: 600; margin-bottom: 2px; }
 .steps p { margin: 0; color: var(--muted); }
@@ -908,7 +908,8 @@ header.top nav .btn { padding: 6px 16px; color: var(--accent-ink); }
 .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
 .toc a { font-size: 14px; padding: 4px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); text-decoration: none; }
 .toc a:hover { border-color: var(--accent); color: var(--ink); }
-td.vars { display: flex; flex-wrap: wrap; gap: 4px; }
+/* stays a table cell: display:flex here broke the row borders */
+td.vars .cp { margin: 2px 0 2px 4px; }
 
 /* =====================================================================
    Shell, Ziadah style (Figma: Navigations): grouped sidebar with a mini mode,
@@ -1326,3 +1327,141 @@ td.vars { display: flex; flex-wrap: wrap; gap: 4px; }
 }
 .landing section h3 { margin: 36px 0 10px; }
 .landing .table-scroll { margin-bottom: 8px; }
+
+/* =====================================================================
+   UX fixes from the October 2026 design audit
+   ===================================================================== */
+
+/* public pages (landing, guide, setup) keep their key links on phones instead of hiding the whole header nav */
+@media (max-width: 860px) {
+  .top { gap: 12px; }
+  .top nav { display: flex; align-items: center; gap: 4px; font-size: 14px; white-space: nowrap; }
+  .top nav a:not(.btn) { padding: 6px 10px; }
+  .top nav .btn { padding: 8px 14px; font-size: 14px; }
+  /* the landing's in-page anchors and the repo link live further down the page anyway */
+  .landing .top nav a[href^="#"], .landing .top nav a[href^="http"] { display: none; }
+}
+@media (max-width: 480px) {
+  .top .mark { white-space: nowrap; font-size: 18px; gap: 8px; }
+  .top .mark svg { width: 26px; height: 26px; }
+  .top nav a:not(.btn) { padding: 6px 8px; }
+}
+
+/* guide: the section index follows you down the page, and headings land below it */
+.toc { position: sticky; top: 0; z-index: 10; margin: 0; padding: 12px 0; background: var(--paper); border-bottom: 1px solid var(--line); }
+.toc a[aria-current="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+main h2[id] { scroll-margin-top: 84px; }
+@media (max-width: 860px) {
+  .toc { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: calc(var(--gutter) * -1); padding-inline: var(--gutter); }
+  .toc::-webkit-scrollbar { display: none; }
+  .toc a { flex: none; }
+}
+@media (prefers-reduced-motion: no-preference) { html:has(.toc) { scroll-behavior: smooth; } }
+
+/* dashboard phone tab bar: one line per tab with short labels, a known height, and nothing hidden behind it */
+.lbl-short { display: none; }
+@media (max-width: 860px) {
+  .app { --mnav: 64px; }
+  .app-side { min-height: calc(var(--mnav) + env(safe-area-inset-bottom)); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
+  .app-nav a { height: calc(var(--mnav) - 12px); justify-content: center; white-space: nowrap; font-size: 12px; line-height: 1.3; }
+  .app-nav a:has(.lbl-short) .lbl { display: none; }
+  .app-nav a .lbl-short { display: inline; }
+  .app-main { padding-bottom: calc(var(--mnav) + 24px + env(safe-area-inset-bottom)); }
+  /* top bar 56 + main top padding 20 + tab bar + 12 breathing room */
+  .app-main .inbox { height: calc(100dvh - 56px - 20px - var(--mnav) - 12px - env(safe-area-inset-bottom)); min-height: 360px; }
+}
+@media (max-width: 760px) { .crumbs .crumb-group { display: none; } }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.crumbs a:hover { color: var(--ink); }
+
+/* 404 */
+.notfound { padding: clamp(48px, 10vw, 120px) 0; max-width: 560px; }
+.notfound-code { margin: 0; font: 700 clamp(64px, 12vw, 120px)/1 var(--display); color: var(--line); letter-spacing: -.02em; }
+.notfound h1 { margin: 8px 0 12px; font: 700 clamp(28px, 4vw, 40px)/1.25 var(--display); }
+.notfound .intro { margin-bottom: 28px; }
+
+/* guide: key/value table, back-to-top button, room under the password generator */
+.kv { width: 100%; max-width: var(--measure); border-collapse: collapse; margin: 10px 0 18px; font-size: 15px; }
+.kv th, .kv td { text-align: start; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.kv th { font: 600 13px var(--body); color: var(--muted); }
+.kv td:first-child { width: 42%; }
+.kv small { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.to-top { position: fixed; inset-inline-start: 20px; bottom: 20px; z-index: 20; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line); background: var(--paper); color: var(--ink); box-shadow: 0 4px 16px #0000001f; cursor: pointer; }
+.to-top[hidden] { display: none; }
+.to-top svg { width: 20px; height: 20px; }
+.to-top:hover { border-color: var(--accent); color: var(--accent); }
+h2 + .note { margin-bottom: 28px; }
+h2 + .note p + p { margin-top: 10px; }
+/* guide env table: on phones each variable becomes a small card instead of a table you scroll sideways */
+@media (max-width: 760px) {
+  .compare.env-table { min-width: 0; }
+  .env-table thead { display: none; }
+  .env-table tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .env-table td { padding: 0; border: 0; }
+  .env-table td:last-child { grid-column: 1 / -1; color: var(--muted); font-size: 15px; }
+  .env-table .env-kind { font-size: 13px; color: var(--muted); }
+}
+/* setup: how much is left at a glance */
+.setup-count { display: flex; align-items: center; gap: 12px; margin: -16px 0 24px; color: var(--muted); font-size: 15px; }
+.setup-count b { color: var(--ink); font-size: 18px; }
+.setup-count .meter { flex: 1; max-width: 240px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.setup-count .meter span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+/* landing hero: two buttons, the guide as a quiet link under them */
+.landing .hero .hero-link { display: inline-block; margin-top: 16px; color: #ffffffbf; font-size: var(--fs-md); text-decoration: none; }
+.landing .hero .hero-link:hover { color: #fff; text-decoration: underline; }
+/* overview: 4 cards a row with the AI meter taking two cells, so 7 cards fill two even rows */
+.app .kpis.kpis-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.app .kpis-grid .kpi-wide { grid-column: span 2; }
+@media (max-width: 1100px) { .app .kpis.kpis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* chart labels are in viewBox units: scale them up when the chart is drawn narrow */
+@media (max-width: 600px) { .chart .axis { font-size: 26px; } }
+
+/* inbox: bubbles sit like WhatsApp in Arabic (yours on the left, theirs on the right) */
+.app .m.out { align-self: flex-end; border-start-start-radius: 16px; border-start-end-radius: 5px; }
+.app .m.in { align-self: flex-start; border-start-end-radius: 16px; border-start-start-radius: 5px; }
+/* draft count: pencil + number, in the warm draft tone so it never reads as "unread" */
+.app .draft-badge { display: inline-flex; align-items: center; gap: 3px; background: var(--warn-bg); color: var(--seal); }
+.app .draft-badge svg { width: 12px; height: 12px; }
+.app .thread-tags { display: contents; }
+@media (max-width: 860px) {
+  .app .thread header { flex-wrap: wrap; }
+  .app .thread header h4 { order: 1; }
+  .app .thread header > .btn:last-child { order: 2; }
+  .app .thread-tags { order: 3; display: flex; gap: 6px; flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+  .app .thread-tags > * { flex: none; }
+}
+
+/* flows: templates fold away once you have flows of your own; per-flow export is a quiet icon */
+.app .presets > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.app .presets > summary::-webkit-details-marker { display: none; }
+.app .presets > summary::after { content: ""; width: 8px; height: 8px; margin-inline-start: auto; border-inline-end: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .15s; }
+.app .presets[open] > summary::after { transform: rotate(-135deg); }
+.app .presets:not([open]) { padding: 14px 16px; border-radius: var(--r-md); background: var(--paper-2); }
+.app .presets:not([open]) > summary { margin: 0; }
+.app .presets:not([open]) > summary h4 { margin: 0; }
+.app .icon-btn { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
+.app .icon-btn:hover { background: var(--line); color: var(--ink); }
+.app .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.app .icon-btn svg { width: 18px; height: 18px; }
+
+/* knowledge: Arabic drop zone instead of the browser's file button; labelled connector fields */
+.app .dropzone { display: grid; justify-items: center; gap: 4px; padding: 22px 16px; border: 1.5px dashed var(--line-strong, var(--line)); border-radius: var(--r-md); background: var(--paper); color: var(--muted); text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+.app .dropzone svg { width: 26px; height: 26px; color: var(--accent); }
+.app .dropzone strong { color: var(--ink); font-weight: 500; }
+.app .dropzone span { font-size: var(--fs-sm); }
+.app .dropzone:hover, .app .dropzone.over, .app .dropzone:focus-within { border-color: var(--accent); background: var(--paper-2); }
+.app .dropzone.busy { opacity: .6; cursor: progress; }
+.app .lf { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
+.app .lf small { font-size: inherit; opacity: .8; }
+.app .lf input { color: var(--ink); width: 100%; }
+.app .card .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.app .list .sub:not([dir]) { text-align: start; }
+
+/* numbers & keys page: four clear blocks instead of one long run; the keys table spans the full width */
+.app .lp-block { padding: 28px 0; border-top: 1px solid var(--line); }
+.app .lp-block:first-of-type { padding-top: 8px; border-top: 0; }
+.app .lp-block > h3 { margin: 0 0 6px; }
+.app .lp-block > .chips { margin: 12px 0; }
+.app .keys-wrap { margin-top: 20px; overflow-x: auto; }
+.app .keys-wrap .compare.keys { display: table; width: 100%; margin-top: 0; }
+@media (max-width: 600px) { .app .keys-wrap .compare.keys { display: block; } }

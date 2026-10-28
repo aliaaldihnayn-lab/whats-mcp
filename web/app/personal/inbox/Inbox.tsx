@@ -203,7 +203,17 @@ function App({ secret, status }: { secret: string; status: Status }) {
                     <span className="av" aria-hidden="true">{initial(label(c))}</span>
                     <span className="cbody">
                       <span className="top">
-                        <span className="nm">{label(c)}{c.drafts ? <span className="badge">{c.drafts}</span> : null}</span>
+                        <span className="nm">
+                          {label(c)}
+                          {/* a pencil, not a bare number: this counts drafts waiting for you, not unread messages */}
+                          {c.drafts ? (
+                            <span className="badge draft-badge" title={`${c.drafts} مسودة تنتظر موافقتك`}>
+                              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L19 9a2.8 2.8 0 00-4-4L4 16v4z" /></svg>
+                              {c.drafts}
+                              <span className="sr">مسودة</span>
+                            </span>
+                          ) : null}
+                        </span>
                         <span className="tm">{short(c.lastAt)}</span>
                       </span>
                       <span className="pv">{c.last ? `${c.last.direction === "out" ? "أنت: " : ""}${c.last.text}` : ""}</span>
@@ -250,10 +260,13 @@ function App({ secret, status }: { secret: string; status: Status }) {
               <header>
                 <button type="button" className="btn ghost small only-narrow" onClick={() => setActive(null)}>← رجوع</button>
                 <h4>{thread?.name || label({ waId: active!, name: chats.find((c) => c.waId === active)?.name })}</h4>
-                {(thread?.tags ?? []).map((t) => (
-                  <button key={t} type="button" className="tag" title="اضغط لحذف الوسم" onClick={() => tagOp(t, true)}>{t} ×</button>
-                ))}
-                <input aria-label="وسم جديد" placeholder="وسم +" value={tag} style={{ width: 90, padding: "4px 10px" }} onChange={(e) => setTag(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tag.trim() && tagOp(tag.trim())} />
+                {/* inline on wide screens, its own sideways-scrolling row on phones */}
+                <div className="thread-tags">
+                  {(thread?.tags ?? []).map((t) => (
+                    <button key={t} type="button" className="tag" title="اضغط لحذف الوسم" onClick={() => tagOp(t, true)}>{t} ×</button>
+                  ))}
+                  <input aria-label="وسم جديد" placeholder="وسم +" value={tag} style={{ width: 90, padding: "4px 10px" }} onChange={(e) => setTag(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tag.trim() && tagOp(tag.trim())} />
+                </div>
                 <button type="button" className="btn ghost small" onClick={markRead} disabled={busy === "read"}>تعليم كمقروء</button>
               </header>
               <div className="msgs" onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>

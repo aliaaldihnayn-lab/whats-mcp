@@ -110,19 +110,19 @@ export function Overview() {
         </div>
       )}
 
-      <div className="kpis">
+      <div className="kpis kpis-grid">
         <Kpi icon={ICO.in} label="رسائل واردة" value={t.messagesIn} sub={`صادرة ${t.messagesOut}`} />
         <Kpi icon={ICO.chats} label="محادثات نشطة" value={t.activeChats} sub={`${d.accounts.length} ${d.accounts.length === 1 ? "رقم" : "أرقام"}`} />
         <Kpi icon={ICO.wait} label="تشغيلات تنتظر" value={t.waiting} sub={t.waiting ? "عند عقدة انتظار" : "ما فيه شي معلّق"} />
         <Kpi icon={ICO.draft} label="مسودات تنتظرك" value={t.drafts} tone={t.drafts ? "warn" : undefined} href="/personal/inbox" sub={t.drafts ? "راجعها في الوارد" : "ما فيه شي معلّق"} />
         <Kpi icon={ICO.runs} label="تشغيلات الفلوات" value={runs} href="/personal/flows?tab=log" sub={`تم ${t.runs.ok} · مسودة ${t.runs.draft}${t.runs.dry ? ` · تجربة ${t.runs.dry}` : ""}${t.runs.skipped ? ` · تخطّى ${t.runs.skipped}` : ""}`} />
         <Kpi icon={ICO.error} label="أخطاء الفلوات" value={t.runs.error} tone={t.runs.error ? "bad" : undefined} href="/personal/flows?tab=log" sub={t.runs.error ? "افتح السجل للتفاصيل" : "كل شي سليم"} />
-        <div className="kpi">
+        <div className="kpi kpi-wide">
           <Ico d={ICO.ai} />
           <strong>{t.aiUsed}<small> / {d.ai.dailyCap}</small></strong>
           <span className="kpi-label">الذكاء الاصطناعي اليوم</span>
           <div className="meter" aria-hidden="true"><span style={{ width: `${aiPct}%` }} /></div>
-          <span className="kpi-sub">يبدأ العداد من جديد منتصف الليل بتوقيت UTC</span>
+          <span className="kpi-sub">يتصفّر منتصف الليل (UTC)</span>
         </div>
       </div>
 
@@ -224,7 +224,7 @@ function Head({ onRefresh, busy, name }: { onRefresh: () => Promise<void>; busy:
         <h2>{name ? `أهلاً بعودتك، ${name}` : "أهلاً بعودتك"}</h2>
         <p className="intro">نظرة سريعة على نشاط أرقامك وفلواتك آخر 24 ساعة. تتحدث كل نص دقيقة تقريباً.</p>
       </div>
-      <button type="button" className="btn solid" onClick={() => void onRefresh()} disabled={busy}>{busy ? "نحدّث…" : "حدّث الآن"}</button>
+      <button type="button" className="btn white" onClick={() => void onRefresh()} disabled={busy}>{busy ? "نحدّث…" : "حدّث الآن"}</button>
     </div>
   );
 }
@@ -253,14 +253,21 @@ function Kpi({ icon, label, value, sub, tone, href }: { icon: string; label: str
 function Chart({ hourly }: { hourly: Data["hourly"] }) {
   const max = Math.max(1, ...hourly.map((h) => h.in + h.out));
   const total = hourly.reduce((s, h) => s + h.in + h.out, 0);
-  const W = 720, H = 150, base = 124, bw = 22, step = W / hourly.length;
+  // the last 40 units on the right hold the value labels of the grid lines
+  const W = 720, H = 150, base = 124, bw = 20, step = (W - 40) / hourly.length;
   if (!total) return <div className="chart-empty">ما فيه رسائل آخر 24 ساعة. أول ما توصل رسائل أو تزامن، يطلع النشاط هنا.</div>;
   return (
     <div className="chart" dir="ltr">
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${total} رسالة في آخر 24 ساعة`} preserveAspectRatio="xMidYMid meet">
-        {[0.5, 1].map((f) => <line key={f} x1="0" x2={W} y1={base - f * 100} y2={base - f * 100} className="grid" />)}
+        {[0.5, 1].map((f) => (
+          <g key={f}>
+            <line x1="0" x2={W - 40} y1={base - f * 100} y2={base - f * 100} className="grid" />
+            <text x={W} y={base - f * 100 + 4} textAnchor="end" className="axis">{Math.round(max * f)}</text>
+          </g>
+        ))}
         {hourly.map((h, i) => {
-          const x = i * step + (step - bw) / 2;
+          // right to left like the rest of the page: the oldest hour sits at the right edge, now at the left
+          const x = (hourly.length - 1 - i) * step + (step - bw) / 2;
           const hi = (h.in / max) * 100;
           const ho = (h.out / max) * 100;
           return (

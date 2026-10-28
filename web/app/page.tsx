@@ -95,8 +95,8 @@ export default async function Home() {
               <div className="actions">
                 <a className="btn solid" href="/personal">افتح النظام</a>
                 <a className="btn ghost" href={DEPLOY_URL}>انشر نسختك مجاناً</a>
-                <a className="btn ghost" href="/guide">دليل الإعداد الكامل</a>
               </div>
+              <a className="hero-link" href="/guide">أول مرة؟ دليل الإعداد خطوة بخطوة (15 دقيقة) <span aria-hidden="true">←</span></a>
               <ul className="hero-stats" aria-label="باختصار">
                 <li><strong>10</strong><span>أرقام خاصة</span></li>
                 <li><strong>5</strong><span>خطوات للبدء</span></li>

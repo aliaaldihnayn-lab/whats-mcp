@@ -46,12 +46,20 @@ export default async function Setup({ searchParams }: { searchParams: Promise<{ 
           <Mark />
           واتساب MCP
         </a>
+        <nav aria-label="روابط">
+          <a href="/guide#s9">الدليل</a>
+          <a className="btn solid" href="/personal">افتح النظام</a>
+        </nav>
       </header>
       <main>
         <section style={{ borderTop: 0, paddingTop: 16 }}>
           <h2>إعداد الربط الرسمي</h2>
           <p className="intro">
             {ready ? "كل الإعدادات موجودة. باقي توصل الـ Webhook عند Meta وتضيف السيرفر لمساعدك." : "فيه إعدادات ناقصة. أضفها من Settings ← Environment Variables في مشروعك على فيرسل، ثم أعد النشر."}
+          </p>
+          <p className="setup-count" role="status">
+            <b>{checks.filter((c) => c.ok).length}</b> من {checks.length} جاهزة
+            <span className="meter" aria-hidden="true"><span style={{ width: `${Math.round((checks.filter((c) => c.ok).length / checks.length) * 100)}%` }} /></span>
           </p>
           <ul className="checks">
             {checks.map((c) => (
