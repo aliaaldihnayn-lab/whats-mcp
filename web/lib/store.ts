@@ -116,6 +116,12 @@ export class Store {
     return m?.waId ? m : null;
   }
 
+  /** Messages by id in the same order; ids we do not hold (or hold only as a status stub) come back null. */
+  async messagesByIds(ids: readonly string[]): Promise<(StoredMessage | null)[]> {
+    const rows = await this.mgetAll<StoredMessage>(ids.map((id) => `${this.p}m:${id}`));
+    return rows.map((m) => (m?.waId ? m : null));
+  }
+
   async messages(waId: string, limit = 30, before?: number): Promise<StoredMessage[]> {
     const ids = await this.kv.zrange<string[]>(`${this.p}c:${waId}`, 0, Math.max(limit * 3, 60) - 1, { rev: true });
     if (!ids.length) return [];
