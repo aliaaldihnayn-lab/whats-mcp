@@ -129,7 +129,10 @@ function App({ secret }: { secret: string }) {
       </div>
       <div className="chips">
         {!data.ai.configured && <a className="chip opt" href="/guide#s3">خطوات التفعيل</a>}
-        <span className={`chip ${data.ai.configured ? "on" : "opt"}`}>{data.ai.configured ? `✓ ${[data.ai.claude && `Anthropic (${data.ai.model})`, data.ai.cheap && `متوافق مع OpenAI (${data.ai.cheapModel ?? "?"})`].filter(Boolean).join(" + ")} جاهز، حد يومي ${data.ai.dailyCap}` : `○ ${PROVIDER_NAME} غير مفعّل: أضف مفتاح Anthropic أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL) في فيرسل`}</span>
+        <span
+          className={`chip ${data.ai.configured ? "on" : "opt"}`}
+          title={data.ai.configured ? [data.ai.claude && `Anthropic: ${data.ai.model}`, data.ai.cheap && `متوافق مع OpenAI: ${data.ai.cheapModel ?? "?"}`].filter(Boolean).join("\n") : undefined}
+        >{data.ai.configured ? `✓ ${PROVIDER_NAME} جاهز · ${data.ai.dailyCap} طلب باليوم` : `○ ${PROVIDER_NAME} غير مفعّل: أضف مفتاح Anthropic أو أي مزود متوافق مع OpenAI (AI_COMPAT_URL و AI_COMPAT_KEY و AI_COMPAT_MODEL) في فيرسل`}</span>
         <span className={`chip ${data.paused ? "off" : "on"}`}>{data.paused ? "✗ كل الفلوات موقوفة" : "✓ الفلوات تشتغل"}</span>
         <button type="button" className="btn ghost small" onClick={() => pause(!data.paused)}>{data.paused ? "شغّل الكل" : "أوقف الكل فوراً"}</button>
       </div>
@@ -168,7 +171,9 @@ function App({ secret }: { secret: string }) {
                       {f.trigger.type === "schedule" ? "جدول زمني" : f.trigger.type === "webhook" ? "Webhook" : f.trigger.chats === "group" ? "رسائل المجموعات" : f.trigger.chats === "both" ? "كل الرسائل" : "الرسائل الخاصة"} · {f.mode === "auto" ? "تلقائي" : f.mode === "approve" ? "مسودة" : "تجربة"} · {data.accounts.find((a) => a.id === f.account)?.label ?? (f.account === "*" ? "كل الأرقام" : f.account)}
                     </span>
                   </button>
-                  <button type="button" className="btn ghost small" title="تنزيل هذا الفلو كملف JSON" onClick={() => downloadJson(fileSafe(f.name), exportFlows([f]))}>تصدير</button>
+                  <button type="button" className="icon-btn" title="تنزيل هذا الفلو كملف JSON" aria-label={`تصدير ${f.name}`} onClick={() => downloadJson(fileSafe(f.name), exportFlows([f]))}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14" /></svg>
+                  </button>
                   <label className="sw small" title={f.enabled ? "مفعّل" : "متوقف"}><input type="checkbox" checked={f.enabled} onChange={() => toggle(f)} aria-label={`تفعيل ${f.name}`} /></label>
                 </div>
               ))}
@@ -182,8 +187,9 @@ function App({ secret }: { secret: string }) {
               )}
             </div>
           </section>
-          <section>
-            <div className="section-head"><h4>ابدأ من قالب</h4></div>
+          {/* open by default only while there is nothing of your own to look at */}
+          <details className="presets" open={data.flows.length === 0 || undefined}>
+            <summary className="section-head"><h4>ابدأ من قالب <span className="muted small">({PRESETS.length})</span></h4></summary>
             <div className="flowlist">
               {PRESETS.map((p) => (
                 <button key={p.id} type="button" className="flowitem" onClick={() => setEdit(p.make())}>
@@ -192,7 +198,7 @@ function App({ secret }: { secret: string }) {
                 </button>
               ))}
             </div>
-          </section>
+          </details>
         </div>
       )}
     </>
