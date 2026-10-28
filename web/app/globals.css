@@ -1401,3 +1401,8 @@ h2 + .note p + p { margin-top: 10px; }
   .env-table td:last-child { grid-column: 1 / -1; color: var(--muted); font-size: 15px; }
   .env-table .env-kind { font-size: 13px; color: var(--muted); }
 }
+/* setup: how much is left at a glance */
+.setup-count { display: flex; align-items: center; gap: 12px; margin: -16px 0 24px; color: var(--muted); font-size: 15px; }
+.setup-count b { color: var(--ink); font-size: 18px; }
+.setup-count .meter { flex: 1; max-width: 240px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.setup-count .meter span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
