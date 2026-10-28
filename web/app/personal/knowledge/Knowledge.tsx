@@ -11,7 +11,13 @@ type Data = { docs: Doc[]; limits: { doc: number; total: number; docs: number };
 const KIND_LABEL: Record<Doc["kind"], string> = { url: "رابط", file: "ملف", text: "نص" };
 
 /** "5 آلاف حرف" reads at a glance; "5ك" did not. */
-const chars = (n: number) => (n < 1000 ? "أقل من ألف حرف" : `${Math.round(n / 1000).toLocaleString("ar-u-nu-latn")} ألف حرف`);
+const chars = (n: number) => {
+  const k = Math.round(n / 1000);
+  if (k < 1) return "أقل من ألف حرف";
+  if (k === 1) return "ألف حرف";
+  if (k === 2) return "ألفين حرف";
+  return `${k} ${k <= 10 ? "آلاف" : "ألف"} حرف`;
+};
 
 export function Knowledge() {
   const { secret } = useSession();
