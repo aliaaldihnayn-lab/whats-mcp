@@ -4,6 +4,13 @@ const config: NextConfig = {
   poweredByHeader: false,
   // Baileys loads a WebAssembly bridge at runtime; keep it out of the bundle.
   serverExternalPackages: ["baileys", "whatsapp-rust-bridge", "pino", "libsignal", "mammoth", "unpdf"],
+  // common typos of the guide link (it was shared as /guid at least once)
+  async redirects() {
+    return [
+      { source: "/guid", destination: "/guide", permanent: true },
+      { source: "/guides", destination: "/guide", permanent: true },
+    ];
+  },
   async headers() {
     return [
       {

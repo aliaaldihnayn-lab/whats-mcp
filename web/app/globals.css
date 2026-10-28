@@ -1326,3 +1326,55 @@ td.vars { display: flex; flex-wrap: wrap; gap: 4px; }
 }
 .landing section h3 { margin: 36px 0 10px; }
 .landing .table-scroll { margin-bottom: 8px; }
+
+/* =====================================================================
+   UX fixes from the October 2026 design audit
+   ===================================================================== */
+
+/* public pages (landing, guide, setup) keep their key links on phones instead of hiding the whole header nav */
+@media (max-width: 860px) {
+  .top { gap: 12px; }
+  .top nav { display: flex; align-items: center; gap: 4px; font-size: 14px; white-space: nowrap; }
+  .top nav a:not(.btn) { padding: 6px 10px; }
+  .top nav .btn { padding: 8px 14px; font-size: 14px; }
+  /* the landing's in-page anchors and the repo link live further down the page anyway */
+  .landing .top nav a[href^="#"], .landing .top nav a[href^="http"] { display: none; }
+}
+@media (max-width: 480px) {
+  .top .mark { white-space: nowrap; font-size: 18px; gap: 8px; }
+  .top .mark svg { width: 26px; height: 26px; }
+  .top nav a:not(.btn) { padding: 6px 8px; }
+}
+
+/* guide: the section index follows you down the page, and headings land below it */
+.toc { position: sticky; top: 0; z-index: 10; margin: 0; padding: 12px 0; background: var(--paper); border-bottom: 1px solid var(--line); }
+.toc a[aria-current="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+main h2[id] { scroll-margin-top: 84px; }
+@media (max-width: 860px) {
+  .toc { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: calc(var(--gutter) * -1); padding-inline: var(--gutter); }
+  .toc::-webkit-scrollbar { display: none; }
+  .toc a { flex: none; }
+}
+@media (prefers-reduced-motion: no-preference) { html:has(.toc) { scroll-behavior: smooth; } }
+
+/* dashboard phone tab bar: one line per tab with short labels, a known height, and nothing hidden behind it */
+.lbl-short { display: none; }
+@media (max-width: 860px) {
+  .app { --mnav: 64px; }
+  .app-side { min-height: calc(var(--mnav) + env(safe-area-inset-bottom)); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
+  .app-nav a { height: calc(var(--mnav) - 12px); justify-content: center; white-space: nowrap; font-size: 12px; line-height: 1.3; }
+  .app-nav a:has(.lbl-short) .lbl { display: none; }
+  .app-nav a .lbl-short { display: inline; }
+  .app-main { padding-bottom: calc(var(--mnav) + 24px + env(safe-area-inset-bottom)); }
+  /* top bar 56 + main top padding 20 + tab bar + 12 breathing room */
+  .app-main .inbox { height: calc(100dvh - 56px - 20px - var(--mnav) - 12px - env(safe-area-inset-bottom)); min-height: 360px; }
+}
+@media (max-width: 760px) { .crumbs .crumb-group { display: none; } }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.crumbs a:hover { color: var(--ink); }
+
+/* 404 */
+.notfound { padding: clamp(48px, 10vw, 120px) 0; max-width: 560px; }
+.notfound-code { margin: 0; font: 700 clamp(64px, 12vw, 120px)/1 var(--display); color: var(--line); letter-spacing: -.02em; }
+.notfound h1 { margin: 8px 0 12px; font: 700 clamp(28px, 4vw, 40px)/1.25 var(--display); }
+.notfound .intro { margin-bottom: 28px; }

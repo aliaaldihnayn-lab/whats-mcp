@@ -22,7 +22,7 @@ const ICON = {
   search: "M21 21l-4.3-4.3M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z",
 };
 
-type Item = { href: string; label: string; icon: string };
+type Item = { href: string; label: string; icon: string; /** fits the phone tab bar on one line */ short?: string };
 // sections follow the Ziadah sidebar: a small muted title that folds, then the pages under it
 const GROUPS: { id: string; label: string; items: Item[] }[] = [
   {
@@ -30,7 +30,7 @@ const GROUPS: { id: string; label: string; items: Item[] }[] = [
     label: "الرئيسية",
     items: [
       { href: "/personal/overview", label: "نظرة عامة", icon: ICON.overview },
-      { href: "/personal/inbox", label: "صندوق الوارد", icon: ICON.inbox },
+      { href: "/personal/inbox", label: "صندوق الوارد", short: "الوارد", icon: ICON.inbox },
     ],
   },
   {
@@ -38,10 +38,10 @@ const GROUPS: { id: string; label: string; items: Item[] }[] = [
     label: "الأتمتة",
     items: [
       { href: "/personal/flows", label: "الفلوات", icon: ICON.flows },
-      { href: "/personal/knowledge", label: "قاعدة المعرفة", icon: ICON.knowledge },
+      { href: "/personal/knowledge", label: "قاعدة المعرفة", short: "المعرفة", icon: ICON.knowledge },
     ],
   },
-  { id: "account", label: "الحساب", items: [{ href: "/personal", label: "الأرقام والمفاتيح", icon: ICON.numbers }] },
+  { id: "account", label: "الحساب", items: [{ href: "/personal", label: "الأرقام والمفاتيح", short: "الحساب", icon: ICON.numbers }] },
 ];
 
 const NAV_KEY = "whats-mcp-nav";
@@ -108,6 +108,7 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
   const whoName = who?.name ?? who?.label ?? "";
   const all = GROUPS.flatMap((g) => g.items);
   const here = all.find((it) => isActive(path, it.href));
+  const hereGroup = GROUPS.find((g) => g.items.some((it) => isActive(path, it.href)));
   const needle = q.trim();
   const matches = needle ? all.filter((it) => it.label.includes(needle)) : null;
   const sub = path.startsWith("/personal/flows/run") ? "تفاصيل التشغيل" : null;
@@ -126,6 +127,7 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
     <Link key={it.href} href={it.href} prefetch title={mini ? it.label : undefined} aria-current={isActive(path, it.href) ? "page" : undefined}>
       <Svg d={it.icon} />
       <span className="lbl">{it.label}</span>
+      {it.short && <span className="lbl-short" aria-hidden="true">{it.short}</span>}
     </Link>
   );
 
@@ -200,16 +202,23 @@ function Shell({ status, children }: { status: Status; children: ReactNode }) {
       </aside>
       <div className="app-col">
         <header className="app-top">
-          <div className="page-title">
-            <Svg d={ICON.overview} />
-            {here && <span aria-current={sub ? undefined : "page"}>{here.label}</span>}
+          {/* breadcrumb: section, then page, so it adds context instead of repeating the page heading */}
+          <nav className="page-title crumbs" aria-label="مسار الصفحة">
+            <Svg d={here?.icon ?? ICON.overview} />
+            {hereGroup && (
+              <>
+                <span className="crumb-group">{hereGroup.label}</span>
+                <span className="sep crumb-group" aria-hidden="true">/</span>
+              </>
+            )}
+            {here && (sub ? <Link href={here.href}>{here.label}</Link> : <span aria-current="page">{here.label}</span>)}
             {sub && (
               <>
                 <span className="sep" aria-hidden="true">/</span>
                 <span aria-current="page">{sub}</span>
               </>
             )}
-          </div>
+          </nav>
           <div className="top-tools">
             <div className="theme" role="group" aria-label="المظهر">
               <button type="button" aria-pressed={theme === "light"} aria-label="مظهر فاتح" onClick={() => setTheme("light")}>
