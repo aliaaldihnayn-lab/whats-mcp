@@ -37,7 +37,9 @@ export type Conversation = {
 /** The few Redis operations we need; implemented by Upstash and by MemoryKV for tests. */
 export interface KV {
   get<T>(key: string): Promise<T | null>;
-  set(key: string, value: unknown, opts?: { ex?: number }): Promise<unknown>;
+  /** With nx the write happens only if the key is absent; the result is "OK" when it happened and null when it did not. */
+  set(key: string, value: unknown, opts?: { ex?: number; nx?: boolean }): Promise<unknown>;
+  del(key: string): Promise<unknown>;
   zadd(key: string, member: { score: number; member: string }): Promise<unknown>;
   /** Rank range by default; with byScore, start/stop are scores (numbers, "-inf" or "+inf") and rev is not supported. */
   zrange<T = string[]>(key: string, start: number | string, stop: number | string, opts?: { rev?: boolean; byScore?: boolean }): Promise<T>;
@@ -219,6 +221,24 @@ export class Store {
     return out;
   }
 
+  /** Small JSON documents for campaigns (state, recipients, outcomes), kept under "mk:". */
+  async mkGet<T>(key: string): Promise<T | null> {
+    return this.kv.get<T>(`${this.p}mk:${key}`);
+  }
+
+  async mkSet(key: string, value: unknown, opts?: { ex?: number }) {
+    await this.kv.set(`${this.p}mk:${key}`, value, opts);
+  }
+
+  /** Takes a named lock that frees itself after ttlSeconds; false when another holder has it. */
+  async mkLock(name: string, ttlSeconds: number): Promise<boolean> {
+    return (await this.kv.set(`${this.p}mk:lock:${name}`, Date.now(), { ex: ttlSeconds, nx: true })) === "OK";
+  }
+
+  async mkUnlock(name: string) {
+    await this.kv.del(`${this.p}mk:lock:${name}`);
+  }
+
   /** Numbers that received a marketing message within the window (default 24 hours), for the messaging-limit count. */
   async recentMarketing(withinMs = 24 * 60 * 60 * 1000, now = Date.now()): Promise<Set<string>> {
     // Members come back as numbers when Upstash auto-deserialises digit strings.
@@ -230,14 +250,32 @@ export class Store {
 /** In-memory KV used by tests and local development without Redis. */
 export class MemoryKV implements KV {
   private data = new Map<string, unknown>();
+  private expiresAt = new Map<string, number>();
   private zsets = new Map<string, Map<string, number>>();
 
-  async get<T>(key: string) {
-    return (this.data.has(key) ? structuredClone(this.data.get(key)) : null) as T | null;
+  private live(key: string) {
+    const exp = this.expiresAt.get(key);
+    if (exp !== undefined && exp <= Date.now()) {
+      this.data.delete(key);
+      this.expiresAt.delete(key);
+    }
+    return this.data.has(key);
   }
-  async set(key: string, value: unknown) {
+
+  async get<T>(key: string) {
+    return (this.live(key) ? structuredClone(this.data.get(key)) : null) as T | null;
+  }
+  async set(key: string, value: unknown, opts?: { ex?: number; nx?: boolean }) {
+    if (opts?.nx && this.live(key)) return null;
     this.data.set(key, structuredClone(value));
+    if (opts?.ex) this.expiresAt.set(key, Date.now() + opts.ex * 1000);
+    else this.expiresAt.delete(key);
     return "OK";
+  }
+  async del(key: string) {
+    this.data.delete(key);
+    this.expiresAt.delete(key);
+    return 1;
   }
   async mget<T extends unknown[]>(...keys: string[]) {
     return (await Promise.all(keys.map((k) => this.get(k)))) as T;
