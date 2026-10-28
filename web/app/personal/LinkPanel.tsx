@@ -15,6 +15,8 @@ export function LinkPanel({ origin }: { origin: string }) {
 function Home({ secret, status, reload, origin }: { secret: string; status: Status; reload: () => Promise<void>; origin: string }) {
   return (
     <>
+      <section className="lp-block" aria-labelledby="lp-status">
+      <h3 id="lp-status">حالة النظام</h3>
       <div className="chips">
         <Chip ok={status.storage} label="قاعدة البيانات (Redis)" />
         <Chip ok={status.cron} label="المزامنة اليومية (CRON_SECRET)" />
@@ -24,22 +26,29 @@ function Home({ secret, status, reload, origin }: { secret: string; status: Stat
       {status.secretWarning && <div className="note"><p><strong>تنبيه على كلمة السر:</strong> {status.secretWarning} لا تستخدمها داخل الروابط، وأنشئ مفتاح جهاز (wmk_…) للربط بدلها.</p></div>}
       <AiTest secret={secret} configured={status.ai} />
       {!status.storage && <div className="note"><p>اربط Upstash Redis من تبويب Storage في مشروعك على فيرسل، ثم أعد النشر. بدونها ما يمكن حفظ الجلسة.</p></div>}
+      </section>
 
-      <h3>أرقامك</h3>
+      <section className="lp-block" aria-labelledby="lp-numbers">
+      <h3 id="lp-numbers">أرقامك</h3>
       <p className="muted">كل رقم يرتبط كجهاز مستقل، وله رسائله وفلواته. تقدر تضيف أكثر من رقم لك.</p>
       <Numbers secret={secret} status={status} reload={reload} />
+      </section>
 
-      <h3 style={{ marginTop: 40 }}>اربطها بمساعدك</h3>
+      <section className="lp-block" aria-labelledby="lp-keys">
+      <h3 id="lp-keys">اربطها بمساعدك</h3>
       <p className="muted">
         لكل جهاز أو شخص مفتاح خاص فيه رابط جاهز. تلصق الرابط في إعدادات المساعد وخلاص، بدون هيدرات. تقدر تحدد له أرقام معينة، أو تخليه للقراءة فقط، وتلغيه متى ما بغيت بدون ما يتأثر الباقي.
       </p>
       <Keys secret={secret} status={status} origin={origin} />
+      </section>
 
-      <h3 style={{ marginTop: 40 }}>النسخة والملاحظات</h3>
+      <section className="lp-block" aria-labelledby="lp-version">
+      <h3 id="lp-version">النسخة والملاحظات</h3>
       <p className="muted">
         نسختك: <code dir="ltr">{status.version?.commit ?? "غير معروفة"}</code>. لو واجهت خطأ أو بغيت ميزة، اضغط الزر وراح يفتح لك بلاغ جاهز فيه رقم النسخة وحالة الإعدادات (بدون أي مفتاح أو رسالة).
       </p>
       <a className="btn ghost" target="_blank" rel="noopener noreferrer" href={reportUrl(status.version ?? { repo: null, commit: null, branch: null, env: "?" }, { "قاعدة البيانات": status.storage, "المزامنة المجدولة": status.cron, "الذكاء الاصطناعي": status.ai, "الرقم الرسمي": status.official, "أرقام مربوطة": String(status.accounts.filter((a) => a.paired).length) }, origin)}>أرسل ملاحظة أو بلاغ خطأ</a>
+      </section>
     </>
   );
 }
@@ -313,6 +322,7 @@ function Keys({ secret, status, origin }: { secret: string; status: Status; orig
       )}
 
       {keys.length > 0 && (
+        <div className="keys-wrap">
         <table className="compare keys">
           <thead>
             <tr><th>الاسم</th><th>الأرقام</th><th>الصلاحية</th><th>آخر استخدام</th><th /></tr>
@@ -329,6 +339,7 @@ function Keys({ secret, status, origin }: { secret: string; status: Status; orig
             ))}
           </tbody>
         </table>
+        </div>
       )}
       <p className="muted" style={{ marginTop: 16 }}>
         مفتاحك الرئيسي (<code>MCP_SECRET</code>) يفتح كل شي ويدخلك هذي اللوحة، فلا تعطيه لأحد. للمفاتيح السريعة بدون لوحة تقدر تضيف <code>MCP_SECRETS</code> في فيرسل (قيم مفصولة بفاصلة)، لكنها بكل الصلاحيات وما تنلغى إلا بحذفها من هناك.

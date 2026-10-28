@@ -1456,3 +1456,12 @@ h2 + .note p + p { margin-top: 10px; }
 .app .lf input { color: var(--ink); width: 100%; }
 .app .card .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .app .list .sub:not([dir]) { text-align: start; }
+
+/* numbers & keys page: four clear blocks instead of one long run; the keys table spans the full width */
+.app .lp-block { padding: 28px 0; border-top: 1px solid var(--line); }
+.app .lp-block:first-of-type { padding-top: 8px; border-top: 0; }
+.app .lp-block > h3 { margin: 0 0 6px; }
+.app .lp-block > .chips { margin: 12px 0; }
+.app .keys-wrap { margin-top: 20px; overflow-x: auto; }
+.app .keys-wrap .compare.keys { display: table; width: 100%; margin-top: 0; }
+@media (max-width: 600px) { .app .keys-wrap .compare.keys { display: block; } }
