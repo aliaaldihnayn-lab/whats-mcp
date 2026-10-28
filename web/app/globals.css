@@ -1415,3 +1415,18 @@ h2 + .note p + p { margin-top: 10px; }
 @media (max-width: 1100px) { .app .kpis.kpis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* chart labels are in viewBox units: scale them up when the chart is drawn narrow */
 @media (max-width: 600px) { .chart .axis { font-size: 26px; } }
+
+/* inbox: bubbles sit like WhatsApp in Arabic (yours on the left, theirs on the right) */
+.app .m.out { align-self: flex-end; border-start-start-radius: 16px; border-start-end-radius: 5px; }
+.app .m.in { align-self: flex-start; border-start-end-radius: 16px; border-start-start-radius: 5px; }
+/* draft count: pencil + number, in the warm draft tone so it never reads as "unread" */
+.app .draft-badge { display: inline-flex; align-items: center; gap: 3px; background: var(--warn-bg); color: var(--seal); }
+.app .draft-badge svg { width: 12px; height: 12px; }
+.app .thread-tags { display: contents; }
+@media (max-width: 860px) {
+  .app .thread header { flex-wrap: wrap; }
+  .app .thread header h4 { order: 1; }
+  .app .thread header > .btn:last-child { order: 2; }
+  .app .thread-tags { order: 3; display: flex; gap: 6px; flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+  .app .thread-tags > * { flex: none; }
+}
