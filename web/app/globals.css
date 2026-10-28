@@ -1409,3 +1409,9 @@ h2 + .note p + p { margin-top: 10px; }
 /* landing hero: two buttons, the guide as a quiet link under them */
 .landing .hero .hero-link { display: inline-block; margin-top: 16px; color: #ffffffbf; font-size: var(--fs-md); text-decoration: none; }
 .landing .hero .hero-link:hover { color: #fff; text-decoration: underline; }
+/* overview: 4 cards a row with the AI meter taking two cells, so 7 cards fill two even rows */
+.app .kpis.kpis-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.app .kpis-grid .kpi-wide { grid-column: span 2; }
+@media (max-width: 1100px) { .app .kpis.kpis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* chart labels are in viewBox units: scale them up when the chart is drawn narrow */
+@media (max-width: 600px) { .chart .axis { font-size: 26px; } }
