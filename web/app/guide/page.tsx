@@ -2,6 +2,7 @@ import { Code } from "@/components/Code";
 import { Copy, Field } from "@/components/Copy";
 import { Mark } from "@/components/Mark";
 import { Secrets } from "@/components/Secrets";
+import { TocSpy } from "@/components/TocSpy";
 import { origin as getOrigin } from "@/lib/origin";
 
 export const metadata = { title: "دليل الإعداد الكامل | واتساب MCP", description: "كل خطوات التثبيت والربط: فيرسل، قاعدة البيانات، مفاتيح الذكاء الاصطناعي، واتساب، Claude، الفلوات والمساعد." };
@@ -71,14 +72,14 @@ export default async function Guide() {
         </section>
 
         <section aria-labelledby="s2">
-          <h2 id="s2">2. المتغيرات (Environment Variables)</h2>
+          <h2 id="s2">2. المتغيرات <bdi dir="ltr">(Environment Variables)</bdi></h2>
           <p className="intro">من Settings ← Environment Variables في مشروعك. بعد أي تغيير اعمل Redeploy.</p>
           <div className="table-scroll">
-            <table className="compare">
+            <table className="compare env-table">
               <thead><tr><th scope="col">المتغير</th><th scope="col">النوع</th><th scope="col">وظيفته</th></tr></thead>
               <tbody>
                 {ENVS.map(([k, t, d]) => (
-                  <tr key={k}><td className="vars">{k.split(" / ").map((n) => <Copy key={n}>{n}</Copy>)}</td><td>{t}</td><td>{d}</td></tr>
+                  <tr key={k}><td className="vars">{k.split(" / ").map((n) => <Copy key={n}>{n}</Copy>)}</td><td className="env-kind">{t}</td><td>{d}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -113,12 +114,15 @@ export default async function Guide() {
           <ol className="steps">
             <li><strong>أنشئ مفتاح API</strong><p>من منصة DeepSeek (platform.deepseek.com). لا تشاركه مع أحد ولا ترسله في أي محادثة.</p></li>
             <li><strong>أضف المتغيرات في Vercel</strong><p>مشروعك ← Settings ← Environment Variables ← Add. انسخ الاسم في خانة Key والقيمة في خانة Value، وكرر لكل سطر:</p>
-              <div className="fields">
-                <Field name="Key" value="AI_COMPAT_URL" note="القيمة ↓" />
-                <Field name="Value" value="https://api.deepseek.com" />
-                <Field name="Key" value="AI_COMPAT_KEY" note="القيمة: مفتاحك من DeepSeek (لا تنسخه هنا)" />
-                <Field name="Key" value="AI_COMPAT_MODEL" note="القيمة ↓" />
-                <Field name="Value" value="deepseek-flash" note="الأرخص ويدعم الأدوات والصور. الأقوى: deepseek-v4-pro (بدون صور)" />
+              <div className="table-scroll">
+                <table className="kv">
+                  <thead><tr><th scope="col">Key</th><th scope="col">Value</th></tr></thead>
+                  <tbody>
+                    <tr><td><Copy>AI_COMPAT_URL</Copy></td><td><Copy>https://api.deepseek.com</Copy></td></tr>
+                    <tr><td><Copy>AI_COMPAT_KEY</Copy></td><td>مفتاحك من DeepSeek (اكتبه بنفسك، لا تنسخه من أي مكان هنا)</td></tr>
+                    <tr><td><Copy>AI_COMPAT_MODEL</Copy></td><td><Copy>deepseek-flash</Copy><small>الأرخص ويدعم الأدوات والصور. الأقوى: deepseek-v4-pro (بدون صور)</small></td></tr>
+                  </tbody>
+                </table>
               </div></li>
             <li><strong>Redeploy</strong><p>من تبويب Deployments ← النقاط الثلاث على آخر نشر ← Redeploy.</p></li>
             <li><strong>تأكد بزر الاختبار</strong><p>افتح <Copy value={origin + "/personal"}>/personal</Copy> واضغط «اختبر الذكاء الاصطناعي». يرسل سؤال صغير للمزود ويقول لك يشتغل أو وش الخطأ (مفتاح غلط، اسم موديل غلط). بعدها جرّب فلو بسيط قبل ما تفعّله تلقائياً.</p></li>
@@ -203,6 +207,7 @@ export default async function Guide() {
           </div>
         </section>
       </main>
+      <TocSpy />
     </div>
   );
 }
