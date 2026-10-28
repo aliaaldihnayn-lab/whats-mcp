@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MemoryRawKV, redisAuthState, isPaired, clearAuth } from "./wa/auth";
+import { MemoryRawKV, redisAuthState, isPaired, clearAuth, phoneForLid, lidForPhone } from "./wa/auth";
 import { toStored, toJid } from "./wa/session";
 
 test("auth state round-trips Buffers through Redis strings", async () => {
@@ -60,4 +60,17 @@ test("toJid", () => {
   assert.equal(toJid("+966 50 000 0001"), "966500000001@s.whatsapp.net");
   assert.equal(toJid("1203630@g.us"), "1203630@g.us");
   assert.throws(() => toJid("12"));
+});
+
+test("hidden-number chats resolve to the phone Baileys mapped", async () => {
+  const kv = new MemoryRawKV();
+  const auth = await redisAuthState(kv);
+  await auth.state.keys.set({ "lid-mapping": { "966500000001": "123456789012345", "123456789012345_reverse": "966500000001" } } as any);
+  await auth.flush();
+  assert.equal(await phoneForLid(kv, "123456789012345@lid"), "966500000001");
+  assert.equal(await phoneForLid(kv, "123456789012345:7@lid"), "966500000001");
+  assert.equal(await phoneForLid(kv, "999@lid"), null);
+  assert.equal(await phoneForLid(kv, "966500000001@s.whatsapp.net"), null);
+  assert.equal(await lidForPhone(kv, "+966 50 000 0001"), "123456789012345@lid");
+  assert.equal(await lidForPhone(kv, "966500000009"), null);
 });
