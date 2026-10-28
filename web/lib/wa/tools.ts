@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AccountDeps } from "../runtime";
 import type { RawKV } from "./auth";
-import { isPaired } from "./auth";
+import { isPaired, lidForPhone, phoneForLid } from "./auth";
 import { MAIN } from "./accounts";
 import { markRead, remember, sendReaction, sendText } from "./ops";
 import { lastSync, toJid, withWhatsApp } from "./session";
@@ -145,7 +145,7 @@ export function registerPersonalTools(server: McpServer, ctx: PersonalCtx) {
     {
       title: "List chats",
       description:
-        "List cached chats (people and groups), most recent first, with name and last message. Syncs first when the cache is older than 2 minutes. Read-only. Use list_messages to read one chat. Returns JSON [{waId (the chat JID), name, lastAt, last}].",
+        "List cached chats (people and groups), most recent first, with name and last message. Syncs first when the cache is older than 2 minutes. Read-only. Use list_messages to read one chat. Returns JSON [{waId (the chat JID), phone (digits, also for hidden-number @lid chats when WhatsApp has shared it), name, lastAt, last}].",
       inputSchema: z.object({
         account: accountArg,
         query: z.string().optional().describe("filter by name or number"),
@@ -158,7 +158,13 @@ export function registerPersonalTools(server: McpServer, ctx: PersonalCtx) {
       const p = pick(account, false);
       if ("error" in p) return fail(p.error);
       const note = fresh ? await refresh(p.a) : "";
-      const chats = (await p.a.deps.store.conversations(limit, query)).map(({ windowOpen, windowClosesAt, lastInboundAt, ...c }) => c);
+      const raw = p.a.deps.raw;
+      const chats = await Promise.all(
+        (await p.a.deps.store.conversations(limit, query)).map(async ({ windowOpen, windowClosesAt, lastInboundAt, ...c }) => {
+          const phone = c.waId.endsWith("@s.whatsapp.net") ? c.waId.split("@")[0] : await phoneForLid(raw, c.waId);
+          return phone ? { ...c, phone } : c;
+        }),
+      );
       return text(`${header(p.a)}${note}\n${JSON.stringify(chats, null, 2)}`.trim());
     },
   );
@@ -182,13 +188,23 @@ export function registerPersonalTools(server: McpServer, ctx: PersonalCtx) {
       const p = pick(account, false);
       if ("error" in p) return fail(p.error);
       try {
-        const jid = toJid(chat);
+        let jid = toJid(chat);
         const note = fresh ? await refresh(p.a) : "";
-        const { store } = p.a.deps;
-        const msgs = await store.messages(jid, limit, before ? Math.floor(Date.parse(before) / 1000) : undefined);
+        const { store, raw } = p.a.deps;
+        const beforeTs = before ? Math.floor(Date.parse(before) / 1000) : undefined;
+        let msgs = await store.messages(jid, limit, beforeTs);
+        if (!msgs.length && jid.endsWith("@s.whatsapp.net")) {
+          // WhatsApp may keep this person's chat under a hidden-number id
+          const lid = await lidForPhone(raw, jid.split("@")[0]);
+          if (lid) {
+            const alt = await store.messages(lid, limit, beforeTs);
+            if (alt.length) [jid, msgs] = [lid, alt];
+          }
+        }
+        const phone = jid.endsWith("@lid") ? await phoneForLid(raw, jid) : jid.endsWith("@s.whatsapp.net") ? jid.split("@")[0] : null;
         const [conv] = await store.conversations(1, jid.split("@")[0]);
         if (!msgs.length) return text(`${header(p.a)}${note} No cached messages in ${jid}.`.trim());
-        return text([header(p.a).trim(), note, `Chat: ${conv?.name ?? jid}`, ...msgs.map((m) => line(m, conv?.name))].filter(Boolean).join("\n"));
+        return text([header(p.a).trim(), note, `Chat: ${conv?.name ?? jid}`, phone ? `Phone: +${phone}` : "", ...msgs.map((m) => line(m, conv?.name))].filter(Boolean).join("\n"));
       } catch (e) {
         return fail(errText(e));
       }

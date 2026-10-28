@@ -92,6 +92,34 @@ export async function redisAuthState(kv: RawKV): Promise<{ state: Authentication
   };
 }
 
+const lidMapKey = (id: string) => `${P}k:lid-mapping:${id}`;
+const userOf = (jid: string) => jid.split("@")[0].split(":")[0];
+const digitsOrNull = (raw: string | null) => {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return typeof v === "string" && /^\d{7,15}$/.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The phone number behind a hidden-number chat (`<id>@lid`), read from the
+ * LID-to-number map that Baileys keeps in the session keys. Read-only: no
+ * connection, no lookup on WhatsApp. Null when WhatsApp has not shared it yet.
+ */
+export async function phoneForLid(kv: RawKV, lidJid: string): Promise<string | null> {
+  if (!lidJid.endsWith("@lid")) return null;
+  return digitsOrNull(await kv.get(lidMapKey(`${userOf(lidJid)}_reverse`)));
+}
+
+/** The hidden-number chat id (`<id>@lid`) for a phone number, when the map has it. */
+export async function lidForPhone(kv: RawKV, phone: string): Promise<string | null> {
+  const user = digitsOrNull(await kv.get(lidMapKey(phone.replace(/\D/g, ""))));
+  return user ? `${user}@lid` : null;
+}
+
 /** Forgets the linked device (after logout or to re-pair). */
 export async function clearAuth(kv: RawKV) {
   const keys = kv.keys ? await kv.keys(P + "*") : [P + "creds"];
