@@ -1406,3 +1406,6 @@ h2 + .note p + p { margin-top: 10px; }
 .setup-count b { color: var(--ink); font-size: 18px; }
 .setup-count .meter { flex: 1; max-width: 240px; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .setup-count .meter span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+/* landing hero: two buttons, the guide as a quiet link under them */
+.landing .hero .hero-link { display: inline-block; margin-top: 16px; color: #ffffffbf; font-size: var(--fs-md); text-decoration: none; }
+.landing .hero .hero-link:hover { color: #fff; text-decoration: underline; }
