@@ -1,6 +1,7 @@
 // Thin client for the official WhatsApp Cloud API (Meta Graph API).
 
 import type { Config } from "./config";
+import type { TemplateInfo } from "./preflight";
 
 export class GraphError extends Error {
   constructor(
@@ -20,6 +21,9 @@ export function normalizePhone(input: string): string {
   }
   return digits;
 }
+
+/** A business-scoped user id such as "US.13491208655302741918": Meta sends it instead of the phone number for some customers. */
+export const isBsuid = (id: string) => /^[A-Z]{2}\.[A-Za-z0-9.]+$/.test(id);
 
 export type SendResult = { messageId: string; waId?: string };
 
@@ -59,12 +63,49 @@ export class Graph {
     const body: Record<string, unknown> = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
-      to: normalizePhone(to),
+      ...(isBsuid(to) ? { recipient: to } : { to: normalizePhone(to) }),
       ...payload,
     };
     if (replyTo) body.context = { message_id: replyTo };
     const data = await this.call<{ contacts?: { wa_id: string }[]; messages: { id: string }[] }>(`/${this.cfg.phoneNumberId}/messages`, { body });
     return { messageId: data.messages?.[0]?.id ?? "", waId: data.contacts?.[0]?.wa_id };
+  }
+
+  /** POST /{phone-number-id}/media: hands Meta the file itself and returns its media id. */
+  async uploadMedia(bytes: Buffer, mime: string, name: string): Promise<string> {
+    if (!this.cfg.accessToken) throw new GraphError("WHATSAPP_ACCESS_TOKEN is not set", 500);
+    const form = new FormData();
+    form.set("messaging_product", "whatsapp");
+    form.set("type", mime);
+    form.set("file", new Blob([new Uint8Array(bytes)], { type: mime }), name);
+    const res = await this.fetchImpl(new URL(`${this.base()}/${this.cfg.phoneNumberId}/media`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.cfg.accessToken}` },
+      body: form,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || data?.error || !data?.id) throw new GraphError(data?.error?.message ?? res.statusText, res.status, data?.error?.code);
+    return String(data.id);
+  }
+
+  /**
+   * Meta's resumable upload, for the sample image a template's IMAGE header must carry when it is
+   * submitted. Returns the handle ("4::...") that goes in example.header_handle.
+   */
+  async uploadHeaderHandle(bytes: Buffer, mime: string, name: string): Promise<string> {
+    const appId = this.cfg.appId || (await this.call<{ id: string }>("/app")).id;
+    const session = await this.call<{ id: string }>(`/${appId}/uploads`, {
+      method: "POST",
+      query: { file_name: name, file_length: String(bytes.length), file_type: mime },
+    });
+    const res = await this.fetchImpl(new URL(`${this.base()}/${session.id}`), {
+      method: "POST",
+      headers: { Authorization: `OAuth ${this.cfg.accessToken}`, file_offset: "0" },
+      body: new Uint8Array(bytes),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.h) throw new GraphError(data?.error?.message ?? res.statusText, res.status, data?.error?.code);
+    return String(data.h);
   }
 
   /** Marks an inbound message (and everything before it) as read; optionally shows "typing…". */
@@ -79,16 +120,54 @@ export class Graph {
     });
   }
 
-  async listTemplates(status?: string, limit = 50) {
+  private waba() {
     if (!this.cfg.wabaId) throw new GraphError("WHATSAPP_WABA_ID is not set", 500);
+    return this.cfg.wabaId;
+  }
+
+  async listTemplates(status?: string, limit = 50) {
     const query: Record<string, string> = { fields: "name,status,language,category,components", limit: String(limit) };
     if (status) query.status = status;
-    return this.call<{ data: unknown[] }>(`/${this.cfg.wabaId}/message_templates`, { query });
+    return this.call<{ data: unknown[] }>(`/${this.waba()}/message_templates`, { query });
+  }
+
+  /** Submits a template for review; the body comes from compileTemplate(). Meta replies with status PENDING. */
+  async createTemplate(payload: Record<string, unknown>) {
+    return this.call<{ id: string; status: string; category: string }>(`/${this.waba()}/message_templates`, { body: payload });
+  }
+
+  /** One template by exact name (and language when given), with review status, quality and any rejection reason. */
+  async getTemplate(name: string, language?: string) {
+    const res = await this.call<{ data: any[] }>(`/${this.waba()}/message_templates`, {
+      query: { name, fields: "id,name,status,language,category,components,quality_score,rejected_reason", limit: "50" },
+    });
+    // Meta's name filter is a substring match, so keep the exact name only.
+    return res.data.find((t) => t.name === name && (!language || t.language === language)) ?? null;
+  }
+
+  /** The template as the campaign preflight reads it, or null when it does not exist. */
+  async getTemplateInfo(name: string, language: string): Promise<TemplateInfo | null> {
+    const t = await this.getTemplate(name, language);
+    if (!t) return null;
+    const body = (t.components ?? []).find((c: any) => c.type === "BODY");
+    const paramCount = new Set([...String(body?.text ?? "").matchAll(/\{\{(\d+)\}\}/g)].map((m) => m[1])).size;
+    return { name: t.name, language: t.language, status: t.status, category: t.category, quality: t.quality_score?.score, paramCount };
+  }
+
+  /** Deletes every language version of the template with this name. */
+  async deleteTemplate(name: string) {
+    return this.call<{ success: boolean }>(`/${this.waba()}/message_templates`, { method: "DELETE", query: { name } });
+  }
+
+  /** Registers the number on the Cloud API. The 6-digit PIN becomes its two-step verification PIN: keep it. */
+  async registerPhone(pin: string) {
+    if (!/^\d{6}$/.test(pin)) throw new Error("The PIN must be exactly 6 digits.");
+    return this.call<{ success: boolean }>(`/${this.cfg.phoneNumberId}/register`, { body: { messaging_product: "whatsapp", pin } });
   }
 
   async phoneInfo() {
     return this.call(`/${this.cfg.phoneNumberId}`, {
-      query: { fields: "display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,throughput,messaging_limit_tier" },
+      query: { fields: "display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,throughput,messaging_limit_tier,status,name_status" },
     });
   }
 

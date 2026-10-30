@@ -12,6 +12,8 @@ import type { Attachment, Loaded } from "../files";
 import { extractFile } from "../kb/extract";
 import { MAX_WAITS, deleteWait, listWaits, pushLog, readQueue, saveDraft, saveWait, writeQueue } from "./storage";
 import { successors } from "./graph";
+import { CLOSING_RULE, GROUP_RULE, LINK_RULE, TEAM_ACTIVE_SECS, TEAM_QUIET_SECS, TEAM_RULE, UNSURE_RULE } from "./links";
+import type { Meetings } from "./meetings";
 import type { Action, Cond, Flow, Graph, LogEntry, LogStep } from "./types";
 
 export type Channel = {
@@ -47,6 +49,8 @@ export type EngineDeps = {
   fetchImpl?: typeof fetch;
   /** the knowledge base context for a question (Claude actions only) */
   knowledge?: (query: string) => Promise<string>;
+  /** official number: free times from Google Calendar for Zaid, and booking the one picked */
+  meetings?: Meetings;
   /** validates webhook addresses; defaults to public-https-only with a DNS check */
   checkUrl?: (url: string) => Promise<string>;
 };
@@ -239,7 +243,8 @@ async function addTag(state: RawKV, chat: string, tag: string) {
 
 async function transcriptFor(x: Ctx, d: EngineDeps, a: { context: number; scope: "chat" | "recent"; hours: number }): Promise<string> {
   const line = (m: StoredMessage, chatName?: string) => {
-    const who = m.direction === "out" ? "Me" : m.senderName || (m.sender ? `+${m.sender}` : chatName || "Them");
+    // on the official number, replies typed in the WhatsApp Business app are the team's, not Zaid's
+    const who = m.direction === "out" ? (m.source === "business_app" ? "Team" : "Me") : m.senderName || (m.sender ? `+${m.sender}` : chatName || "Them");
     const t = localParts(m.timestamp * 1000, x.flow.tz).hhmm;
     return `[${t}] ${who}: ${(bodyOf(m) || `[${m.type}]`).slice(0, 800)}`;
   };
@@ -257,6 +262,12 @@ async function transcriptFor(x: Ctx, d: EngineDeps, a: { context: number; scope:
   return msgs.map((m) => line(m, x.chatName)).join("\n").slice(-6000);
 }
 
+/** when a team member last wrote in this chat from the WhatsApp Business app (unix seconds) */
+async function teamWroteAt(d: EngineDeps, chat: string): Promise<number | undefined> {
+  const m = (await d.store.messages(chat, 20)).filter((m) => m.direction === "out" && m.source === "business_app").pop();
+  return m?.timestamp;
+}
+
 async function runAi(a: Extract<Action, { type: "ai" | "ai_reply" }>, x: Ctx, d: EngineDeps): Promise<string> {
   if (!d.ai) throw new Error("Set ANTHROPIC_API_KEY in Vercel to use Claude in flows.");
   if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
@@ -267,6 +278,13 @@ async function runAi(a: Extract<Action, { type: "ai" | "ai_reply" }>, x: Ctx, d:
     const recent = (await d.store.messages(x.chat, 4)).filter((m) => m.direction === "in").map(bodyOf).join("\n");
     const kb = await d.knowledge(`${recent}\n${a.prompt ?? ""}`.trim());
     if (kb) system += `\n\n${KNOWLEDGE_RULES}\n\n<knowledge>\n${kb}\n</knowledge>`;
+  }
+  if (a.type === "ai_reply" && d.channel.kind === "official") {
+    system += `\n\n${LINK_RULE}\n\n${CLOSING_RULE}\n\n${UNSURE_RULE}\n\n${GROUP_RULE}`;
+    const team = await teamWroteAt(d, x.chat);
+    if (team && x.now / 1000 - team < TEAM_ACTIVE_SECS) system += `\n\n${TEAM_RULE}`;
+    const cal = await d.meetings?.context(x.chat, x.chatName).catch(() => "");
+    if (cal) system += `\n\n${cal}`;
   }
   const task = a.type === "ai_reply" ? "Write my next reply to the last message from the other person." : "Do what the instructions above ask, using the conversation(s).";
   const out = await d.ai({ system, user: `<conversation>\n${transcript}\n</conversation>\n\n${task}`, maxTokens: a.maxTokens, model: a.model, provider: a.provider });
@@ -455,7 +473,10 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
         }
         case "ai_reply": {
           needChat(a.type);
-          const out = await runAi(a, x, d);
+          // a team member typing in the app right now owns the chat: Zaid stays out
+          const team = d.channel.kind === "official" ? await teamWroteAt(d, x.chat) : undefined;
+          let out = team && x.now / 1000 - team < TEAM_QUIET_SECS ? SKIP : await runAi(a, x, d);
+          if (!out.includes(SKIP) && d.meetings && mode === "auto") out = await d.meetings.apply(out, x.chat, x.chatName);
           x.vars.ai = out === SKIP ? "" : out;
           output = x.vars.ai;
           detail = out.includes(SKIP) ? "Claude chose not to reply" : await deliver(x.chat, out, a.quote ? x.msg?.id : undefined);
@@ -767,6 +788,49 @@ export async function runWebhookFlow(flow: Flow, input: WebhookInput, d: EngineD
   const entry: LogEntry = { ...fired.entry, text: input.text?.slice(0, 100), trigger: { text: input.text?.slice(0, 1000), type: "webhook" } };
   await pushLog(d.state, [entry]);
   return entry;
+}
+
+// ---------- unanswered chats ----------
+
+const hasAiReply = (f: Flow) => f.actions.some((a) => a.type === "ai_reply") || !!f.graph?.nodes.some((n) => n.kind === "action" && n.action.type === "ai_reply");
+
+/**
+ * Chats whose last message is the other person's and that the AI-reply flow never handled (it failed, or the
+ * message came in while flows were off or before the flow existed) get one pass through the AI-reply flows, while the 24-hour window still has
+ * at least half an hour left. The person waits `minAgeMinutes` first so a live reply or the team can answer.
+ */
+export async function catchUpUnanswered(d: EngineDeps, now = Date.now(), opts: { minAgeMinutes?: number; max?: number; scan?: number } = {}): Promise<LogEntry[]> {
+  const { minAgeMinutes = 10, max = 5, scan = 100 } = opts;
+  const flows = d.flows.filter((f) => f.trigger.type === "message" && f.trigger.direction !== "out" && f.trigger.chats !== "group" && hasAiReply(f));
+  if (d.paused || !flows.length) return [];
+  const logs: LogEntry[] = [];
+  const nowS = Math.floor(now / 1000);
+  let done = 0;
+  for (const c of await d.store.conversations(scan, undefined, nowS)) {
+    if (done >= max || (d.deadline && Date.now() > d.deadline)) break;
+    const m = c.last;
+    if (!m || m.direction !== "in" || m.type === "reaction" || c.waId.endsWith("@g.us")) continue;
+    if (nowS - m.timestamp < minAgeMinutes * 60 || !c.windowClosesAt || c.windowClosesAt - nowS < 1800) continue;
+    const chatName = await d.store.getName(c.waId);
+    const tags = await getTags(d.state, c.waId);
+    for (const flow of flows) {
+      const x = makeCtx(flow, d, now, m, chatName, tags);
+      try {
+        if (!(await matches(flow, x, d)).ok) continue;
+        // a message the flow already looked at and chose to skip (personal, bot, team) stays skipped
+        if (await d.state.get(`flow:seen:${flow.id}:${m.id}`)) continue;
+        if (!(await d.state.set(`flow:catch:${flow.id}:${m.id}`, "1", { ex: 7 * 86400, nx: true }))) continue;
+        done++;
+        const fired = await fire(flow, x, d);
+        if (fired) logs.push({ ...fired.entry, note: fired.entry.note ?? "reply to an unanswered message" });
+        if (fired?.stop) break;
+      } catch (e) {
+        logs.push({ ...logBase(flow, x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }
+  await pushLog(d.state, logs);
+  return logs;
 }
 
 // ---------- dry run for the dashboard ----------
