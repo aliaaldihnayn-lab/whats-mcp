@@ -577,3 +577,76 @@ export async function listCampaigns(deps: CampaignDeps, limit = 20): Promise<Cam
   }
   return out;
 }
+
+// -- recipients (read-only, for the CRM dashboard) ---------------------------
+
+export type RecipientResult = {
+  /** full number: the caller is a trusted internal dashboard reading with a key */
+  phone: string;
+  /** ISO time of the send attempt */
+  at: string;
+  template: string;
+  language: string;
+  /** failed | sent | delivered | read */
+  status: string;
+  errorCode?: number;
+  error?: string;
+  replied: boolean;
+  firstReplyAt?: string;
+  /** first 200 characters of the first reply after the send */
+  replyText?: string;
+  optedOut: boolean;
+};
+
+export type CampaignRecipients = {
+  campaign: Pick<CampaignView, "id" | "status" | "template" | "total" | "startedAt" | "finishedAt">;
+  /** recipients that have a send attempt so far */
+  attempted: number;
+  offset: number;
+  rows: RecipientResult[];
+};
+
+/**
+ * Who a campaign reached, with delivery state and whether they replied after the send.
+ * Reads only. Whether the recipient later subscribed is not known here: the dashboard
+ * matches the phone against Zid and Salla subscriptions.
+ */
+export async function campaignRecipients(deps: CampaignDeps, id: string, offset = 0, limit = 200): Promise<CampaignRecipients | null> {
+  const { store } = deps;
+  const c = await load(store, id);
+  if (!c) return null;
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  const page = outcomes.slice(offset, offset + limit);
+  const accepted = page.filter((o) => o.ok && o.messageId);
+  const msgs = await store.messagesByIds(accepted.map((o) => o.messageId!));
+  const statusById = new Map<string, { status?: string; error?: string }>();
+  accepted.forEach((o, i) => statusById.set(o.messageId!, { status: msgs[i]?.status, error: msgs[i]?.error }));
+  const optedOut = await store.optedOut(page.map((o) => o.phone));
+  const rows: RecipientResult[] = [];
+  for (const o of page) {
+    const m = o.messageId ? statusById.get(o.messageId) : undefined;
+    const failed = !o.ok || m?.status === "failed";
+    const sentSec = Math.floor(o.at / 1000);
+    const thread = o.ok ? await store.messages(o.phone, 50) : [];
+    const reply = thread.filter((x) => x.direction === "in" && x.timestamp >= sentSec).sort((a, b) => a.timestamp - b.timestamp)[0];
+    rows.push({
+      phone: o.phone,
+      at: new Date(o.at).toISOString(),
+      template: c.template.name,
+      language: c.template.language,
+      status: failed ? "failed" : m?.status ?? "sent",
+      errorCode: failed ? o.errorCode ?? parseErrorCode(m?.error) : undefined,
+      error: failed ? o.error ?? m?.error : undefined,
+      replied: !!reply,
+      firstReplyAt: reply ? new Date(reply.timestamp * 1000).toISOString() : undefined,
+      replyText: reply ? (reply.text ?? reply.caption ?? `[${reply.type}]`).slice(0, 200) : undefined,
+      optedOut: optedOut.has(o.phone),
+    });
+  }
+  return {
+    campaign: { id: c.id, status: c.status, template: c.template, total: c.total, startedAt: c.startedAt, finishedAt: c.finishedAt },
+    attempted: outcomes.length,
+    offset,
+    rows,
+  };
+}
