@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { call, errMsg, invalidate, useApi, useSession, type Status } from "../shared";
+import { call, errMsg, invalidate, uploadPieces, useApi, useSession, type Status } from "../shared";
+import { mediaKind, mediaProblem } from "@/lib/media";
 import { Select } from "../Select";
 
 type Chat = { waId: string; name?: string; lastAt: number; last?: { text: string; direction: "in" | "out"; type: string }; group: boolean; windowOpen?: boolean; tags: string[]; drafts: number };
@@ -11,7 +12,7 @@ type Draft = { id: string; account: string; accountLabel?: string; flowName: str
 
 const EMOJIS = ["👍", "❤️", "😂", "🙏", "✅"];
 const initial = (s: string) => [...s.replace(/^\+/, "").trim()][0] ?? "؟";
-const label = (c: { waId: string; name?: string }) => c.name || (c.waId.endsWith("@g.us") ? "مجموعة" : "+" + c.waId.split("@")[0]);
+const label = (c: { waId: string; name?: string }) => c.name || (c.waId.endsWith("@g.us") ? "مجموعة" : /^\d/.test(c.waId) ? "+" + c.waId.split("@")[0] : c.waId);
 
 function short(sec: number) {
   if (!sec) return "";
@@ -28,7 +29,8 @@ export function Inbox() {
 }
 
 function App({ secret, status }: { secret: string; status: Status }) {
-  const [account, setAccount] = useState("main");
+  // The official number is the live one when it is set up; personal numbers stay one pick away.
+  const [account, setAccount] = useState(status.official ? "official" : "main");
   const [q, setQ] = useState("");
   const [dq, setDq] = useState("");
   const [active, setActive] = useState<string | null>(null);
@@ -39,6 +41,10 @@ function App({ secret, status }: { secret: string; status: Status }) {
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState("");
   const [newTo, setNewTo] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [tplOpen, setTplOpen] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [bf, setBf] = useState<{ running: boolean; line: string }>({ running: false, line: "" });
   const stopBf = useRef(false);
   const bottom = useRef<HTMLDivElement>(null);
@@ -93,32 +99,59 @@ function App({ secret, status }: { secret: string; status: Status }) {
     e.preventDefault();
     const to = active ?? newTo;
     const body = text.trim();
-    if (!body || !to) return;
+    const attach = active ? file : null;
+    if ((!body && !attach) || !to) return;
     const reply = replyTo;
     // Show the message at once; the server answer replaces it, a failure puts the text back.
     if (active) {
       threadApi.set((prev) => ({
         ...(prev ?? { tags: [], messages: [] }),
-        messages: [...(prev?.messages ?? []), { id: `tmp-${Date.now()}`, waId: to, direction: "out", type: "text", text: body, timestamp: Math.floor(Date.now() / 1000), status: "sending", replyTo: reply?.id }],
+        messages: [...(prev?.messages ?? []), { id: `tmp-${Date.now()}`, waId: to, direction: "out", type: attach ? mediaKind(attach.type) ?? "document" : "text", ...(attach ? { caption: body, filename: attach.name } : { text: body }), timestamp: Math.floor(Date.now() / 1000), status: "sending", replyTo: reply?.id }],
       }));
     }
     setText("");
     setReplyTo(null);
+    setFile(null);
     stick.current = true;
     setBusy("send");
     try {
-      await call(secret, "/api/personal/inbox", { body: { op: "send", account, chat: to, text: body, replyTo: reply?.id } });
+      if (attach) {
+        setProgress(1);
+        const id = await uploadPieces(secret, attach, attach.name, setProgress);
+        await call(secret, "/api/personal/inbox", { body: { op: "media", account, chat: to, text: body, replyTo: reply?.id, upload: id } });
+      } else {
+        await call(secret, "/api/personal/inbox", { body: { op: "send", account, chat: to, text: body, replyTo: reply?.id } });
+      }
       invalidate("/api/personal/inbox");
       if (!active) setNewTo("");
       await Promise.all([loadChats(), active ? loadThread(active) : undefined]);
     } catch (err) {
       setText(body);
       setReplyTo(reply);
+      if (attach) setFile(attach);
       say(errMsg(err));
       if (active) await loadThread(active);
     } finally {
       setBusy("");
+      setProgress(0);
     }
+  };
+
+  useEffect(() => (setFile(null), setTplOpen(false)), [active, account]);
+  const afterTemplate = async () => {
+    setTplOpen(false);
+    say("انرسل القالب");
+    invalidate("/api/personal/inbox");
+    if (!active) setNewTo("");
+    await Promise.all([loadChats(), active ? loadThread(active) : undefined]);
+  };
+
+  const pickFile = (f: File | undefined) => {
+    if (fileInput.current) fileInput.current.value = "";
+    if (!f) return;
+    const problem = mediaProblem(f.type, f.size);
+    if (problem) return say(problem);
+    setFile(f);
   };
 
   const sync = () =>
@@ -243,7 +276,13 @@ function App({ secret, status }: { secret: string; status: Status }) {
                 <textarea id="newchat-text" placeholder="اكتب رسالتك…" value={text} onChange={(e) => setText(e.target.value)} />
                 <button className="btn solid" disabled={!newTo || !text.trim() || busy === "send"}>{busy === "send" ? "يرسل…" : "أرسل"}</button>
               </form>
-              {kind === "official" && <p className="hint">الرقم الرسمي يرسل نص حر فقط خلال 24 ساعة من آخر رسالة للعميل.</p>}
+              {kind === "official" && (
+                <>
+                  <p className="hint">الرقم الرسمي يرسل نص حر فقط خلال 24 ساعة من آخر رسالة للعميل. لعميل جديد أو نافذة مسكرة استخدم قالب.</p>
+                  <button type="button" className="btn ghost small" onClick={() => setTplOpen((x) => !x)}>📄 {tplOpen ? "إخفاء القوالب" : "أرسل قالب"}</button>
+                  {tplOpen && <TemplatePanel secret={secret} account={account} to={newTo.replace(/\D/g, "")} onSent={afterTemplate} onError={say} />}
+                </>
+              )}
             </div>
           ) : (
             <>
@@ -265,7 +304,11 @@ function App({ secret, status }: { secret: string; status: Status }) {
                       {m.direction === "in" && active!.endsWith("@g.us") && <div className="who">{m.senderName || (m.sender ? "+" + m.sender : "")}</div>}
                       {quoted && <div className="quote">{(quoted.text ?? quoted.caption ?? `[${quoted.type}]`).slice(0, 120)}</div>}
                       {body}
-                      {["image", "video", "audio", "document", "sticker"].includes(m.type) && <div className="muted">[{m.type}{m.filename ? `: ${m.filename}` : ""}]</div>}
+                      {["image", "video", "audio", "document", "sticker"].includes(m.type) && (
+                        <div className="muted">
+                          [{m.type}{m.filename ? `: ${m.filename}` : ""}]
+                        </div>
+                      )}
                       <div className="meta">
                         <time>{new Date(m.timestamp * 1000).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
                         {m.direction === "out" && m.status && <span>{m.status === "read" ? "✓✓ قُرئت" : m.status === "delivered" ? "✓✓" : m.status === "failed" ? "فشل" : m.status === "sending" ? "…" : "✓"}</span>}
@@ -293,7 +336,7 @@ function App({ secret, status }: { secret: string; status: Status }) {
                     ردّ على: {(replyTo.text ?? replyTo.caption ?? `[${replyTo.type}]`).slice(0, 100)} <button type="button" className="tag" onClick={() => setReplyTo(null)}>×</button>
                   </div>
                 )}
-                {kind === "official" && thread?.window && !thread.window.windowOpen && <p className="hint">انتهت نافذة الـ 24 ساعة لهذا العميل، الإرسال الحر ما يشتغل. استخدم قالباً من مساعدك.</p>}
+                {kind === "official" && thread?.window && !thread.window.windowOpen && <p className="hint">انتهت نافذة الـ 24 ساعة لهذا العميل، الإرسال الحر ما يشتغل. اضغط "📄 قالب" تحت.</p>}
                 <textarea
                   aria-label="الرسالة"
                   placeholder="اكتب رسالة… (Enter للإرسال، Shift+Enter لسطر جديد)"
@@ -306,9 +349,22 @@ function App({ secret, status }: { secret: string; status: Status }) {
                     }
                   }}
                 />
+                {tplOpen && kind === "official" && <TemplatePanel secret={secret} account={account} to={active!} onSent={afterTemplate} onError={say} />}
+                {file && (
+                  <div className="quote">
+                    مرفق: {file.name} ({(file.size / 1024 / 1024).toFixed(1)} ميقا){text.trim() ? "، والنص يروح تعليق عليه" : ""} <button type="button" className="tag" onClick={() => setFile(null)}>×</button>
+                  </div>
+                )}
                 <div className="row">
-                  <span className="hint">{busy === "send" ? "يرسل… قد ياخذ بضع ثواني" : "تنرسل من رقمك الحقيقي فوراً"}</span>
-                  <button className="btn solid" disabled={!text.trim() || busy === "send"}>أرسل</button>
+                  {kind === "official" && (
+                    <>
+                      <input ref={fileInput} type="file" hidden accept=".jpg,.jpeg,.png,.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx" onChange={(e) => pickFile(e.target.files?.[0])} />
+                      <button type="button" className="btn ghost small" title="إرفاق صورة أو ملف" onClick={() => fileInput.current?.click()} disabled={busy === "send"}>📎 إرفاق</button>
+                      <button type="button" className="btn ghost small" title="رسالة من قالب معتمد" onClick={() => setTplOpen((x) => !x)}>📄 قالب</button>
+                    </>
+                  )}
+                  <span className="hint">{busy === "send" ? (progress > 0 && progress < 100 ? `يرفع الملف… ${progress}%` : "يرسل… قد ياخذ بضع ثواني") : "تنرسل من رقمك الحقيقي فوراً"}</span>
+                  <button className="btn solid" disabled={(!text.trim() && !file) || busy === "send"}>أرسل</button>
                 </div>
               </form>
             </>
@@ -317,6 +373,66 @@ function App({ secret, status }: { secret: string; status: Status }) {
       </div>
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
+  );
+}
+
+type Tpl = { name: string; language: string; category: string; body: string; params: number; header: "IMAGE" | "TEXT" | null; headerText?: string };
+
+/** Picks an approved template, fills its variables (and header image) and sends it after a cost check. */
+function TemplatePanel({ secret, account, to, onSent, onError }: { secret: string; account: string; to: string; onSent: () => Promise<void>; onError: (m: string) => void }) {
+  const api = useApi<{ templates: Tpl[] }>(`/api/personal/inbox?account=${account}&view=templates`, { fresh: 60_000 });
+  const [key, setKey] = useState("");
+  const [params, setParams] = useState<string[]>([]);
+  const [img, setImg] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const list = api.data?.templates ?? [];
+  const t = list.find((x) => `${x.name}|${x.language}` === key);
+  const preview = t ? t.body.replace(/\{\{(\d+)\}\}/g, (m, n) => params[Number(n) - 1] || m) : "";
+  const ready = !!t && !!to && params.slice(0, t.params).filter((x) => x.trim()).length === t.params && (t.header !== "IMAGE" || !!img);
+
+  const send = async () => {
+    if (!t) return;
+    const kind = t.category === "MARKETING" ? "تسويقية" : t.category === "UTILITY" ? "خدمات" : t.category;
+    if (!confirm(`نرسل قالب "${t.name}" لـ ${to}؟ هذي رسالة ${kind} وMeta تحاسب عليها.`)) return;
+    setBusy(true);
+    try {
+      const headerUpload = img ? await uploadPieces(secret, img, img.name) : undefined;
+      await call(secret, "/api/personal/inbox", { body: { op: "template", account, chat: to, name: t.name, language: t.language, params: params.slice(0, t.params), body: t.body, headerUpload } });
+      setKey("");
+      setParams([]);
+      setImg(null);
+      await onSent();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tplpanel" style={{ display: "grid", gap: 8, marginBottom: 8 }}>
+      {api.error && <p className="err small">{api.error}</p>}
+      {!api.error && api.data && !list.length && <p className="hint">ما فيه قوالب معتمدة بعد. أنشئها من صفحة الحملات.</p>}
+      <Select aria-label="القالب" value={key} onChange={(e) => (setKey(e.target.value), setParams([]), setImg(null))}>
+        <option value="">اختر قالباً معتمداً…</option>
+        {list.map((x) => <option key={`${x.name}|${x.language}`} value={`${x.name}|${x.language}`}>{x.name} ({x.language}){x.header === "IMAGE" ? " · صورة" : ""}</option>)}
+      </Select>
+      {t && (
+        <>
+          {t.header === "IMAGE" && (
+            <label className="btn ghost small">
+              {img ? `صورة الرأس: ${img.name}` : "اختر صورة الرأس (JPG أو PNG، أقل من 5 ميقا)"}
+              <input type="file" hidden accept="image/jpeg,image/png" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) f.size > 5 * 1024 * 1024 ? onError("الصورة أكبر من 5 ميقا.") : setImg(f); }} />
+            </label>
+          )}
+          {Array.from({ length: t.params }, (_, i) => (
+            <input key={i} aria-label={`المتغير ${i + 1}`} placeholder={`قيمة {{${i + 1}}}`} value={params[i] ?? ""} onChange={(e) => { const p = [...params]; p[i] = e.target.value; setParams(p); }} />
+          ))}
+          <div className="quote" style={{ whiteSpace: "pre-wrap" }}>{t.headerText ? `${t.headerText}\n` : ""}{preview}</div>
+          <button type="button" className="btn solid" disabled={!ready || busy} onClick={send}>{busy ? "يرسل…" : "أرسل القالب"}</button>
+        </>
+      )}
+    </div>
   );
 }
 
