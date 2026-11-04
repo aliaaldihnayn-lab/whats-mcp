@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { advanceCampaign, campaignReport, createDryRun, listCampaigns, resumeCampaign, startCampaign, stopCampaign, type CampaignDeps, type DryRunRow } from "./campaign";
+import { advanceCampaign, campaignRecipients, campaignReport, createDryRun, listCampaigns, resumeCampaign, startCampaign, stopCampaign, type CampaignDeps, type DryRunRow } from "./campaign";
 import type { Config } from "./config";
 import { GraphError, type Graph } from "./graph";
 import { loadUpload, storageProblem, submitTemplate } from "./marketing";
@@ -47,7 +47,7 @@ const buttonSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("PHONE_NUMBER"), text: z.string(), phone: z.string().describe("international format with +, e.g. +966500000000") }),
 ]);
 
-export function registerMarketingTools(server: McpServer, { graph, store, cfg }: Deps) {
+export function registerMarketingTools(server: McpServer, { graph, store, cfg }: Deps, opts: { crm?: boolean } = {}) {
   const deps: CampaignDeps = { graph, store };
   const guard = () => storageProblem(cfg);
 
@@ -254,6 +254,48 @@ export function registerMarketingTools(server: McpServer, { graph, store, cfg }:
     },
   );
 
+
+
+  // ---- opt-outs ----------------------------------------------------------
+  server.registerTool(
+    "manage_opt_out",
+    {
+      title: "Opt a customer out or back in",
+      description:
+        "opt_out stops marketing messages to a number (customers who reply stop are handled automatically). opt_in records that the customer asked to receive them again; only use it when they actually did.",
+      inputSchema: z.object({ phone: z.string().describe("Saudi mobile in any common spelling"), action: z.enum(["opt_out", "opt_in"]), reason: z.string().default("set by hand") }),
+      annotations: WRITE,
+    },
+    async ({ phone, action, reason }) => {
+      const problem = guard();
+      if (problem) return fail(problem);
+      const p = normalizeSaudiMobile(phone);
+      if (!p) return fail(`"${phone}" is not a Saudi mobile number.`);
+      try {
+        if (action === "opt_out") await store.recordOptOut(p, reason);
+        else await store.recordOptIn(p);
+        return json({ phone: `${p.slice(0, 5)}****${p.slice(-3)}`, optedOut: (await store.optedOut([p])).has(p) });
+      } catch (e) {
+        return fail(explain(e));
+      }
+    },
+  );
+
+
+  registerMarketingReadTools(server, { graph, store, cfg }, { crm: opts.crm });
+}
+
+
+/**
+ * Read-only marketing tools: campaign list, report, opt-outs.
+ * With crm (CAMPAIGN_READ_TOOLS=1 on the campaigns deployment only) it also adds
+ * campaign_recipients and check_opt_outs, which return full numbers for the internal
+ * CRM dashboard. A read-only key gets these through registerMarketingReadTools alone.
+ */
+export function registerMarketingReadTools(server: McpServer, { graph, store, cfg }: Deps, opts: { crm?: boolean } = {}) {
+  const deps: CampaignDeps = { graph, store };
+  const guard = () => storageProblem(cfg);
+
   server.registerTool(
     "campaign_report",
     {
@@ -294,32 +336,6 @@ export function registerMarketingTools(server: McpServer, { graph, store, cfg }:
     },
   );
 
-  // ---- opt-outs ----------------------------------------------------------
-
-  server.registerTool(
-    "manage_opt_out",
-    {
-      title: "Opt a customer out or back in",
-      description:
-        "opt_out stops marketing messages to a number (customers who reply stop are handled automatically). opt_in records that the customer asked to receive them again; only use it when they actually did.",
-      inputSchema: z.object({ phone: z.string().describe("Saudi mobile in any common spelling"), action: z.enum(["opt_out", "opt_in"]), reason: z.string().default("set by hand") }),
-      annotations: WRITE,
-    },
-    async ({ phone, action, reason }) => {
-      const problem = guard();
-      if (problem) return fail(problem);
-      const p = normalizeSaudiMobile(phone);
-      if (!p) return fail(`"${phone}" is not a Saudi mobile number.`);
-      try {
-        if (action === "opt_out") await store.recordOptOut(p, reason);
-        else await store.recordOptIn(p);
-        return json({ phone: `${p.slice(0, 5)}****${p.slice(-3)}`, optedOut: (await store.optedOut([p])).has(p) });
-      } catch (e) {
-        return fail(explain(e));
-      }
-    },
-  );
-
   server.registerTool(
     "list_opt_outs",
     {
@@ -334,6 +350,51 @@ export function registerMarketingTools(server: McpServer, { graph, store, cfg }:
       try {
         const all = await store.optOuts();
         return json({ total: all.length, optOuts: all.slice(0, limit).map((o) => ({ phone: `${o.phone.slice(0, 5)}****${o.phone.slice(-3)}`, at: new Date(o.at).toISOString(), reason: o.reason })) });
+      } catch (e) {
+        return fail(explain(e));
+      }
+    },
+  );
+
+  if (!opts.crm) return;
+
+  server.registerTool(
+    "campaign_recipients",
+    {
+      title: "Campaign recipients and replies",
+      description:
+        "Who a campaign was sent to (full numbers), the template, delivery state (sent, delivered, read, failed with the error), whether they replied after the send with the first reply, and whether they opted out. Read-only. Pages of up to 500. Whether a recipient later subscribed is not known here: match the phone against subscription data.",
+      inputSchema: z.object({ campaign_id: z.string(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(500).default(200) }),
+      annotations: READ,
+    },
+    async ({ campaign_id, offset, limit }) => {
+      const problem = guard();
+      if (problem) return fail(problem);
+      try {
+        const r = await campaignRecipients(deps, campaign_id, offset, limit);
+        return r ? json(r) : fail("Campaign not found.");
+      } catch (e) {
+        return fail(explain(e));
+      }
+    },
+  );
+
+  server.registerTool(
+    "check_opt_outs",
+    {
+      title: "Check numbers against the opt-out list",
+      description: "Given up to 500 numbers, returns the ones currently opted out of marketing, with when and why. Read-only. Use it to keep opted-out stores out of a suggested campaign.",
+      inputSchema: z.object({ phones: z.array(z.string()).min(1).max(500).describe("Saudi mobiles in any common spelling") }),
+      annotations: READ,
+    },
+    async ({ phones }) => {
+      const problem = guard();
+      if (problem) return fail(problem);
+      try {
+        const norm = [...new Set(phones.map((p) => normalizeSaudiMobile(p)).filter((p): p is string => !!p))];
+        const out = await store.optedOut(norm);
+        const info = new Map((await store.optOuts()).map((o) => [o.phone, o]));
+        return json({ checked: norm.length, optedOut: [...out].map((p) => ({ phone: p, at: info.get(p) ? new Date(info.get(p)!.at).toISOString() : undefined, reason: info.get(p)?.reason })) });
       } catch (e) {
         return fail(explain(e));
       }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { advanceCampaign, campaignReport, createDryRun, resumeCampaign, startCampaign, stopCampaign, type CampaignDeps, type DryRunRow } from "./campaign";
+import { advanceCampaign, campaignRecipients, campaignReport, createDryRun, resumeCampaign, startCampaign, stopCampaign, type CampaignDeps, type DryRunRow } from "./campaign";
 import { GraphError } from "./graph";
 import { MemoryKV, Store } from "./store";
 
@@ -268,4 +268,32 @@ test("report counts delivery and masks numbers", async () => {
   assert.equal(r.pending, 9);
   assert.deepEqual(r.errors, [{ code: 131026, count: 1, meaning: undefined }]);
   assert.match(r.failureSample[0].phone, /^96650\*{4}\d{3}$/);
+});
+
+
+test("recipients: delivery state, reply after the send, opt-out, full numbers", async () => {
+  const t = setup();
+  t.g.failFor.set(phone(3), 131026);
+  const id = await started(t, 4);
+  let s = await advanceCampaign(t.deps, id, fast);
+  while (s.status === "waiting" || s.status === "running") s = await advanceCampaign(t.deps, id, fast);
+  const sentSec = Math.floor(NOW / 1000);
+  await t.store.updateStatus("wamid.1", "read");
+  // a reply before the send must not count; one after it does
+  await t.store.saveMessage({ id: "in-old", waId: phone(2), direction: "in", type: "text", text: "قديم", timestamp: sentSec - 3600 });
+  await t.store.saveMessage({ id: "in-1", waId: phone(1), direction: "in", type: "text", text: "مهتم، كم السعر؟", timestamp: sentSec + 60 });
+  await t.store.recordOptOut(phone(4), "replied stop");
+  const r = await campaignRecipients(t.deps, id);
+  assert.ok(r);
+  assert.equal(r!.attempted, 4);
+  const by = new Map(r!.rows.map((x) => [x.phone, x]));
+  assert.equal(by.get(phone(1))?.status, "read");
+  assert.equal(by.get(phone(1))?.replied, true);
+  assert.equal(by.get(phone(1))?.replyText, "مهتم، كم السعر؟");
+  assert.equal(by.get(phone(2))?.replied, false);
+  assert.equal(by.get(phone(3))?.status, "failed");
+  assert.equal(by.get(phone(3))?.errorCode, 131026);
+  assert.equal(by.get(phone(4))?.optedOut, true);
+  assert.equal(by.get(phone(1))?.template, TEMPLATE.name);
+  assert.equal(await campaignRecipients(t.deps, "missing"), null);
 });
