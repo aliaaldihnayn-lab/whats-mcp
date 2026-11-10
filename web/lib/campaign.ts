@@ -213,7 +213,8 @@ export function templateShape(components: any[]): TemplateShape | { error: strin
       (c.buttons ?? []).forEach((b: any, i: number) => {
         if (b.type === "URL" && /\{\{/.test(b.url ?? "")) shape.urlVars.push(i);
       });
-      const bad = (c.buttons ?? []).find((b: any) => !["QUICK_REPLY", "PHONE_NUMBER", "URL"].includes(b.type));
+      // VOICE_CALL (call on WhatsApp) is static like PHONE_NUMBER: it takes no parameter at send time.
+      const bad = (c.buttons ?? []).find((b: any) => !["QUICK_REPLY", "PHONE_NUMBER", "URL", "VOICE_CALL"].includes(b.type));
       if (bad) return { error: `Template has a ${bad.type} button, which campaigns do not support yet.` };
     }
   }
