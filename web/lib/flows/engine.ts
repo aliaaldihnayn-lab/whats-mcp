@@ -4,7 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { RawKV } from "../wa/auth";
-import type { Store, StoredMessage } from "../store";
+import type { Conversation, Store, StoredMessage } from "../store";
 import { assertPublicUrl } from "../net";
 import { AGENT_PROMPT, DEFAULT_REPLY_PROMPT, GUARD, KNOWLEDGE_RULES, SKIP, type AgentClient, type AgentFile, type AiClient } from "./ai";
 import type { Connector } from "../connectors";
@@ -836,14 +836,15 @@ const hasAiReply = (f: Flow) => f.actions.some((a) => a.type === "ai_reply") || 
  * message came in while flows were off or before the flow existed) get one pass through the AI-reply flows, while the 24-hour window still has
  * at least half an hour left. The person waits `minAgeMinutes` first so a live reply or the team can answer.
  */
-export async function catchUpUnanswered(d: EngineDeps, now = Date.now(), opts: { minAgeMinutes?: number; max?: number; scan?: number } = {}): Promise<LogEntry[]> {
+export async function catchUpUnanswered(d: EngineDeps, now = Date.now(), opts: { minAgeMinutes?: number; max?: number; scan?: number; convs?: Conversation[] } = {}): Promise<LogEntry[]> {
   const { minAgeMinutes = 10, max = 5, scan = 100 } = opts;
   const flows = d.flows.filter((f) => f.trigger.type === "message" && f.trigger.direction !== "out" && f.trigger.chats !== "group" && hasAiReply(f));
   if (d.paused || !flows.length) return [];
   const logs: LogEntry[] = [];
   const nowS = Math.floor(now / 1000);
   let done = 0;
-  for (const c of await d.store.conversations(scan, undefined, nowS)) {
+  // the caller may pass the chats it already read, so one wake-up reads them once
+  for (const c of opts.convs ? opts.convs.slice(0, scan) : await d.store.conversations(scan, undefined, nowS)) {
     if (done >= max || (d.deadline && Date.now() > d.deadline)) break;
     // the Business app's away message is not an answer: look past it
     const m = c.last && isAppAuto(c.last) ? (await d.store.messages(c.waId, 6)).filter((k) => !isAppAuto(k)).pop() : c.last;
