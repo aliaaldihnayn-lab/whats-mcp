@@ -1,0 +1,256 @@
+// Meetings on the official number: Zaid offers free times from Google Calendar, books the one the
+// merchant picks (marker [[BOOK <local time> <email> <store link>]] in its reply), and reminds them on the day.
+
+import type { RawKV } from "../wa/auth";
+import type { Store } from "../store";
+import type { Channel } from "./engine";
+import { findMerchant } from "../merchants";
+import { Calendar, connection, type CalEvent, freeSlots, getSettings, localIso, slotLabel, spread, timeLabel, type Settings } from "../gcal";
+
+export const HANDOFF = "جاري تحويلك للفريق المختص\n\nان لم تتلقى رد خلال 24 ساعة، فضلاً عاود الإرسال فذلك بسبب كثرة الرسائل أو اجازة الأسبوع";
+const MARKER = /\[\[\s*BOOK\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\s+([^\s\]]+)(?:\s+([^\s\]]+))?\s*\]\]/i;
+const MOVE = /\[\[\s*MOVE\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})\s*\]\]/i;
+const EMAIL = /^[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}$/i;
+
+export type Meetings = {
+  /** extra system text with the free times (or the merchant's meeting already booked), or "" when the calendar is not connected */
+  context(chat?: string, name?: string): Promise<string>;
+  /** books when the reply carries a marker and returns the text to send */
+  apply(reply: string, chat: string, name?: string): Promise<string>;
+};
+
+/** free slots; `own` is the merchant's meeting being moved, so its own time does not block the new one */
+async function free(cal: Calendar, s: Settings, now: number, own?: CalEvent) {
+  const busy = (await cal.busy(now, now + (s.aheadDays + 1) * 86400000)).filter((b) => !own || b.start !== own.start || b.end !== own.end);
+  return freeSlots(s, busy, now, 60);
+}
+
+export function meetings(base: RawKV, store?: Store, now: () => number = Date.now, cal = new Calendar(base)): Meetings {
+  // the merchant's next meeting, so Zaid never books a second one
+  const booked = async (s: Settings, chat?: string, name?: string, email?: string) => {
+    if (!chat || !store) return undefined;
+    try {
+      const t = now();
+      const evs = (await cal.events(t - 3 * 3600000, t + (s.aheadDays + 1) * 86400000)).filter((e) => e.end > t);
+      return await existingFor(evs, store, chat, name, email);
+    } catch (e) {
+      console.error("calendar read failed", e);
+      return undefined;
+    }
+  };
+  return {
+    async context(chat, name) {
+      if (!(await connection(base)).connected) return "";
+      const s = await getSettings(base);
+      const ev = await booked(s, chat, name);
+      if (ev) {
+        const link = ev.meet ? ` The meeting link is ${ev.meet}; write it as [دخول الاجتماع](${ev.meet}).` : " There is no meeting link yet; say the team will send it before the meeting.";
+        const head = `Meetings: this merchant already has a meeting booked ${slotLabel(ev.start, s.tz)} (${s.tz}).${link}
+- Do not book another meeting and never output [[BOOK]].
+- If they ask for a meeting or about it, tell them this time.`;
+        // only a meeting Zaid booked is moved by Zaid; one the team added by hand stays with the team
+        let times: number[] = [];
+        if (ev.chat) times = await free(cal, s, now(), ev).then((f) => spread(f.filter((t) => t !== ev.start), s.tz)).catch(() => []);
+        if (!times.length) return `${head}\n- If they want to move or cancel it, hand over to the team as usual.`;
+        return `${head}
+- If they say this time does not suit them or ask to move it, offer two or three of the free times below, copying each Arabic label exactly. Never offer or accept any other time; if they ask for one that is not listed, say it is not available and offer the listed times closest to it.
+- Only when they have clearly chosen one of these times, write a short confirmation and end the reply with exactly [[MOVE <time in brackets>]], for example [[MOVE ${localIso(times[0], s.tz)}]]. The system moves the meeting and emails them the new time.
+- If they want to cancel it, or none of the times suits them, hand over to the team as usual.
+Free times (${s.tz}):
+${times.map((t) => `- ${slotLabel(t, s.tz)} [${localIso(t, s.tz)}]`).join("\n")}`;
+      }
+      let offer: number[];
+      try {
+        offer = spread(await free(cal, s, now()), s.tz);
+      } catch (e) {
+        console.error("calendar read failed", e);
+        return "";
+      }
+      const list = offer.length ? offer.map((t) => `- ${slotLabel(t, s.tz)} [${localIso(t, s.tz)}]`).join("\n") : "(no free times right now)";
+      return `Meetings: you can book a ${s.minutes}-minute online meeting (Google Meet) yourself. This replaces handing meeting requests to the team.
+- Offer the merchant two or three of the free times below, copying each Arabic label exactly, including صباحًا or مساءً; never rewrite a time or call it morning or evening yourself. Never offer or accept any other time. If the merchant asks for a time that is not listed, say that time is not available and offer the listed times closest to it.
+- To send the calendar invite you need the merchant's email, and the team needs their store link; ask for whichever is not in the conversation, both in one message.
+- Only when the merchant has clearly chosen one of these times and given an email, write a short confirmation and end the reply with exactly [[BOOK <time in brackets> <email> <store link>]], for example [[BOOK ${offer[0] ? localIso(offer[0], s.tz) : "2026-11-02T10:30"} name@example.com https://shop.example.com]]. Leave the store link out only if the merchant has none or does not want to share it; never invent one. The system books it and adds the meeting link.
+- If none of the times suits them or no free times are listed, hand over to the team as usual.
+Free times (${s.tz}):
+${list}`;
+    },
+
+    async apply(reply, chat, name) {
+      const mv = MOVE.exec(reply);
+      if (mv) {
+        try {
+          const s = await getSettings(base);
+          const ev = await booked(s, chat, name);
+          if (!ev?.chat) throw new Error("no meeting of Zaid's to move");
+          const slot = (await free(cal, s, now(), ev)).find((t) => localIso(t, s.tz) === mv[1]);
+          if (slot === undefined) throw new Error(`${mv[1]} is not free any more`);
+          const moved = await cal.move(ev.id, slot, slot + s.minutes * 60000, s.tz);
+          return `تم تعديل موعدنا إلى ${slotLabel(slot, s.tz)} بإذن الله، ووصلك التحديث على الإيميل.${meetLine(moved.meet ? moved : ev)}`;
+        } catch (e) {
+          console.error("meeting move failed", chat, e);
+          return `ما قدرت أعدل الموعد تلقائياً، والفريق بيأكده لك.\n\n${HANDOFF}`;
+        }
+      }
+      const m = MARKER.exec(reply);
+      if (!m) return reply;
+      const text = reply.replace(MARKER, "").trim();
+      const [, when, email, link] = m;
+      try {
+        if (!EMAIL.test(email)) throw new Error(`bad email ${email}`);
+        const s = await getSettings(base);
+        const had = await booked(s, chat, name, email);
+        if (had) return `موعدنا محجوز لك من قبل ${slotLabel(had.start, s.tz)} بإذن الله${had.meet ? meetLine(had) : "، والفريق بيرسل لك رابط الاجتماع قبل الموعد"}`;
+        const slot = (await free(cal, s, now())).find((t) => localIso(t, s.tz) === when);
+        if (slot === undefined) throw new Error(`${when} is not free any more`);
+        const site = siteUrl(link) ?? (store ? await storeLinkIn(store, chat) : undefined);
+        const storeName = await findMerchant(base, chat).then((l) => l[0]?.store).catch(() => undefined);
+        const ev = await cal.book({ start: slot, end: slot + s.minutes * 60000, title: s.title, email, chat, name, storeName, tz: s.tz, store: site });
+        // the system's confirmation replaces Zaid's own wording, so the merchant reads it once
+        return `تم حجز موعدنا ${slotLabel(slot, s.tz)} بإذن الله، ووصلتك دعوة على ${email}.${meetLine(ev)}`;
+      } catch (e) {
+        console.error("meeting booking failed", chat, e);
+        return `ما قدرت أثبت الموعد تلقائياً، والفريق بيأكده لك.\n\n${HANDOFF}`;
+      }
+    },
+  };
+}
+
+const EMAIL_INDEX = "meet:email-index";
+const EMAILS = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+// links and bare domains, but not the domain of an email address
+const SITES = /(?<![@\w.-])(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"'\]]*)?/gi;
+// links that are never a merchant's store
+const NOT_STORE = /(^|\.)(google\.com|youtube\.com|youtu\.be|wa\.me|whatsapp\.com|ziadah\.app|instagram\.com|tiktok\.com|x\.com|twitter\.com|snapchat\.com|facebook\.com|hotmail\.com|gmail\.com|outlook\.com)$/i;
+
+/** a store link as https://..., or undefined when it is not one */
+export function siteUrl(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!/\.[a-z]{2,}$/i.test(u.hostname) || NOT_STORE.test(u.hostname)) return undefined;
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/** the last store link the merchant wrote in the chat */
+export async function storeLinkIn(store: Store, chat: string): Promise<string | undefined> {
+  const msgs = (await store.messages(chat, 60)).filter((m) => m.direction === "in").reverse();
+  for (const m of msgs) for (const raw of (`${m.text ?? ""}`.match(SITES) ?? []).reverse()) {
+    const u = siteUrl(raw.replace(/[.,!?؟،:;)]+$/, ""));
+    if (u) return u;
+  }
+  return undefined;
+}
+// Saudi mobiles as booking forms write them: +966 5x, 00966 5x, 05x
+const PHONES = /(?:\+|00)?966[\s-]?5[\d\s-]{8,12}|\b05[\d\s-]{8,11}/g;
+
+export function phonesIn(text: string): string[] {
+  // the number Zaid writes in a booking, any country: "رقم التاجر: +971507405545"
+  const own = [...text.matchAll(/رقم التاجر:\s*\+?(\d{9,15})/g)].map((m) => m[1]);
+  return [...own, ...(text.match(PHONES) ?? []).map((p) => {
+    const d = p.replace(/\D/g, "").replace(/^00/, "");
+    return d.startsWith("05") ? `966${d.slice(1)}` : d;
+  }).filter((d) => /^9665\d{8}$/.test(d))];
+}
+
+/** The WhatsApp chat a calendar event belongs to: Zaid's own tag, a phone in the booking details, or a guest email the merchant wrote in a chat. */
+export class ChatMatcher {
+  private emails?: Map<string, string>;
+  /** `cache` keeps the email index for 30 minutes: building it reads 100 chats (about 500 Redis calls) */
+  constructor(private store: Store, private scan = 100, private cache?: RawKV) {}
+
+  private async emailIndex() {
+    if (this.emails) return this.emails;
+    const saved = await this.cache?.get(EMAIL_INDEX).catch(() => null);
+    if (saved) return (this.emails = new Map(JSON.parse(saved) as [string, string][]));
+    const map = new Map<string, string>();
+    for (const c of await this.store.conversations(this.scan)) {
+      for (const m of await this.store.messages(c.waId, 60)) {
+        if (m.direction !== "in") continue;
+        for (const e of `${m.text ?? ""}`.match(EMAILS) ?? []) if (!map.has(e.toLowerCase())) map.set(e.toLowerCase(), c.waId);
+      }
+    }
+    await this.cache?.set(EMAIL_INDEX, JSON.stringify([...map]), { ex: 1800 }).catch(() => null);
+    return (this.emails = map);
+  }
+
+  async chatFor(ev: CalEvent): Promise<string | undefined> {
+    if (ev.chat) return ev.chat;
+    for (const p of phonesIn(`${ev.text ?? ""}\n${ev.summary ?? ""}`)) if ((await this.store.messages(p, 1)).length) return p;
+    if (!ev.emails?.length) return undefined;
+    const idx = await this.emailIndex();
+    for (const e of ev.emails) if (idx.has(e)) return idx.get(e);
+    return undefined;
+  }
+}
+
+// words that say nothing about which store a meeting is for
+const GENERIC = new Set(["اجتماع", "متابعه", "زياده", "متجر", "مؤسسه", "شركه", "موعد", "عرض", "تطبيق", "meeting", "store", "ziadah", "call"]);
+const norm = (s: string) => s.toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/ى/g, "ي").replace(/[\u064B-\u0652\u0640]/g, "");
+const words = (s: string) =>
+  new Set(norm(s).split(/[^\p{L}\p{N}]+/u).map((w) => w.replace(/^(ال|لل)(?=\p{L}{3})/u, "")).filter((w) => w.length >= 4 && !GENERIC.has(w)));
+
+/**
+ * The merchant's upcoming meeting, if any: Zaid's tag, their phone or one of their emails in the event, or,
+ * for a meeting the team added by hand, a distinctive word of the chat name (the store name) in its title.
+ */
+export async function existingFor(evs: CalEvent[], store: Store, chat: string, name?: string, email?: string): Promise<CalEvent | undefined> {
+  const mine = new Set<string>(email ? [email.toLowerCase()] : []);
+  for (const m of await store.messages(chat, 60)) if (m.direction === "in") for (const e of `${m.text ?? ""}`.match(EMAILS) ?? []) mine.add(e.toLowerCase());
+  const named = words(name ?? "");
+  return evs.find(
+    (ev) =>
+      ev.chat === chat ||
+      phonesIn(`${ev.text ?? ""}\n${ev.summary ?? ""}`).includes(chat) ||
+      (ev.emails ?? []).some((e) => mine.has(e)) ||
+      (!ev.chat && !ev.emails?.length && [...words(ev.summary ?? "")].some((w) => named.has(w))),
+  );
+}
+
+/**
+ * Meetings in the calendar that belong to a WhatsApp chat (booked by Zaid, from the booking page or by the team):
+ * - a confirmation for one booked in the last two days that Zaid did not book itself (Zaid confirms in its reply);
+ * - one reminder REMIND_MINUTES before it starts (sent at the first wake-up inside that window).
+ * Both only while the merchant's 24-hour window is open.
+ */
+type Deps = { base: RawKV; store: Store; state: RawKV; channel: Channel };
+// shown as a "دخول الاجتماع" button on the official number
+const meetLine = (ev: CalEvent) => (ev.meet ? `\n[دخول الاجتماع](${ev.meet})` : "");
+export const REMIND_MINUTES = 45;
+
+export async function sendMeetingReminders(d: Deps, now = Date.now(), cal = new Calendar(d.base)): Promise<string[]> {
+  if (!(await connection(d.base)).connected) return [];
+  const s = await getSettings(d.base);
+  const match = new ChatMatcher(d.store, 100, d.state);
+  const sent: string[] = [];
+  const send = async (chat: string, text: string) => {
+    try {
+      await d.channel.sendText(chat, text);
+      sent.push(chat);
+      return true;
+    } catch (e) {
+      console.error("meeting message failed", chat, e);
+      return false;
+    }
+  };
+  for (const ev of await cal.events(now + 5 * 60000, now + (s.aheadDays + 1) * 86400000)) {
+    const fresh = !ev.chat && !!ev.created && now - ev.created < 2 * 86400000;
+    const due = ev.start - now <= REMIND_MINUTES * 60000;
+    if (!fresh && !due) continue;
+    const chat = await match.chatFor(ev);
+    if (!chat || !(await d.store.window(chat, Math.floor(now / 1000))).windowOpen) continue;
+    if (fresh && (await d.state.set(`mc:${ev.id}`, "1", { ex: 30 * 86400, nx: true }))) {
+      // a confirmation this close to the start already says when; no separate reminder after it
+      if (due) await d.state.set(`mr:${ev.id}`, "1", { ex: 3 * 86400 });
+      await send(chat, `حياك الله، تم تأكيد موعدنا ${slotLabel(ev.start, s.tz)} بإذن الله${meetLine(ev)}`);
+      continue;
+    }
+    if (due && (await d.state.set(`mr:${ev.id}`, "1", { ex: 3 * 86400, nx: true }))) {
+      await send(chat, `حياك الله للتذكير\nموعدنا اليوم بإذن الله الساعة ${timeLabel(ev.start, s.tz)}${meetLine(ev)}`);
+    }
+  }
+  return sent;
+}

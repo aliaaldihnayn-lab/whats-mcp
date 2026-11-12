@@ -11,9 +11,16 @@ import { listConnectors } from "../connectors";
 import { connectMcp } from "../mcpclient";
 import { fileUrl, loadFile, publicBase, saveFile } from "../files";
 import { knowledgeContext } from "../kb/store";
-import { runFlows, type Channel, type EngineDeps } from "./engine";
+import { catchUpUnanswered, runFlows, type Channel, type EngineDeps } from "./engine";
 import { flowsFor, isPaused } from "./storage";
+import { ctaPayload, linkButton, plainLinks, ticketImage } from "./links";
+import { sendFollowups } from "./followup";
+import { findMerchant, merchantContext } from "../merchants";
+import { meetings, sendMeetingReminders } from "./meetings";
 import type { StoredMessage } from "../store";
+
+/** how often the official number re-reads all chats for catch-ups, follow-ups and meeting reminders */
+export const HOUSEKEEP_SECS = 1800;
 
 const num = (v: string | undefined, fallback: number) => (v && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
 
@@ -66,8 +73,25 @@ export function officialChannel(io: OfficialIO): Channel {
     sendText: async (chat, text, replyTo) => {
       const w = await io.store.window(chat);
       if (!w.windowOpen) throw new Error("the 24-hour window is closed; use a template");
-      const res = await io.graph.sendMessage(chat, { type: "text", text: { body: text } }, replyTo);
-      await io.store.saveMessage({ id: res.messageId, waId: chat, direction: "out", type: "text", text, timestamp: Math.floor(Date.now() / 1000), status: "sent", source: "api", replyTo });
+      const save = (id: string, type: string, body: string) =>
+        io.store.saveMessage({ id, waId: chat, direction: "out", type, text: body, timestamp: Math.floor(Date.now() / 1000), status: "sent", source: "api", replyTo });
+      const button = linkButton(text);
+      if (button) {
+        try {
+          const image = ticketImage(text, publicBase());
+          const res = await io.graph.sendMessage(chat, ctaPayload(button, image), replyTo).catch((e) => {
+            if (!image) throw e;
+            return io.graph.sendMessage(chat, ctaPayload(button), replyTo); // the picture must never cost the reply
+          });
+          await save(res.messageId, "interactive", `${button.body}\n[${button.label}: ${button.url}]`);
+          return res.messageId;
+        } catch {
+          // a rejected button must not lose the reply: send it as text below
+        }
+      }
+      const body = plainLinks(text);
+      const res = await io.graph.sendMessage(chat, { type: "text", text: { body } }, replyTo);
+      await save(res.messageId, "text", body);
       return res.messageId;
     },
     react: async (chat, msg, emoji) => void (await io.graph.sendMessage(chat, { type: "reaction", reaction: { message_id: msg.id, emoji } })),
@@ -89,5 +113,19 @@ export const engineExtras = (base: RawKV): Omit<EngineDeps, "flows" | "state" | 
 export async function runOfficialFlows(fresh: StoredMessage[], io: OfficialIO) {
   const flows = await flowsFor(io.base, "official");
   if (!flows.length || (await isPaused(io.base))) return [];
-  return runFlows({ flows, state: io.state, store: io.store, channel: officialChannel(io), deadline: Date.now() + 45_000, ...engineExtras(io.base) }, fresh);
+  const channel = officialChannel(io);
+  const deps: EngineDeps = { flows, state: io.state, store: io.store, channel, deadline: Date.now() + 45_000, ...engineExtras(io.base), meetings: meetings(io.base, io.store), merchant: async (chat) => merchantContext(await findMerchant(io.base, chat)) };
+  const logs = await runFlows(deps, fresh);
+  // The housekeeping below reads every recent chat (over a thousand Redis calls), so it runs at most once
+  // every HOUSEKEEP_SECS whatever wakes us: a message, a delivery receipt or the cron ping. Nothing in it is
+  // more urgent than that: unanswered chats wait up to 30 minutes, follow-ups 20 hours, reminders 45 minutes.
+  if (!(await io.state.set("housekeep", "1", { ex: HOUSEKEEP_SECS, nx: true }))) return logs;
+  // one read of the chats, shared by the catch-up and the follow-ups
+  const convs = await io.store.conversations(200).catch((e) => (console.error("chat list failed", e), undefined));
+  if (!convs) return logs;
+  // a merchant whose last message got no answer gets one more look while the window is open
+  logs.push(...(await catchUpUnanswered(deps, Date.now(), { convs }).catch((e) => (console.error("catch-up failed", e), []))));
+  await sendFollowups({ store: io.store, state: io.state, channel, convs }).catch((e) => console.error("follow-ups failed", e));
+  await sendMeetingReminders({ base: io.base, store: io.store, state: io.state, channel }).catch((e) => console.error("meeting reminders failed", e));
+  return logs;
 }

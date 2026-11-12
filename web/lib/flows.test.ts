@@ -739,3 +739,615 @@ test("webhook: approve mode makes drafts, conditions can route on hook fields, p
   assert.equal(await runWebhookFlow(gated, { to: "966500000001", text: "عادي", data: {} }, deps, NOW), null, "no action, no log");
   await assert.rejects(() => runWebhookFlow(hookFlow(), { data: {} }, { ...deps, paused: true }, NOW), /paused/);
 });
+
+test("a link in an official reply becomes one cta_url button, with a text fallback", async () => {
+  const { linkButton, plainLinks, ctaPayload, DEFAULT_LINK_LABEL } = await import("./flows/links");
+  assert.deepEqual(linkButton("تقدر تشوف الباقات هنا: [شوف الباقات](https://ziadah.app/pricing)"), { body: "تقدر تشوف الباقات هنا: شوف الباقات", label: "شوف الباقات", url: "https://ziadah.app/pricing" });
+  assert.deepEqual(linkButton("الشرح كامل هنا:\nhttps://ziadah.app/help/a1."), { body: "الشرح كامل هنا", label: DEFAULT_LINK_LABEL, url: "https://ziadah.app/help/a1" });
+  assert.equal(linkButton("ما فيه رابط"), null);
+  assert.equal(linkButton("http://insecure.example"), null);
+  const two = linkButton("[أ](https://a.example/x) و [ب](https://b.example/y)")!;
+  assert.equal(two.url, "https://a.example/x");
+  assert.equal(two.body, "أ و ب: https://b.example/y");
+  assert.equal(linkButton("[اسم طويل جدا جدا جدا جدا للزر](https://a.example)")!.label, DEFAULT_LINK_LABEL);
+  assert.equal(plainLinks("[شوف](https://a.example)"), "شوف: https://a.example");
+  assert.deepEqual(ctaPayload({ body: "b", label: "l", url: "https://u.example" }).interactive.action, { name: "cta_url", parameters: { display_text: "l", url: "https://u.example" } });
+
+  const { officialChannel } = await import("./flows/sync");
+  const store = new Store(new MemoryKV());
+  await store.saveMessage({ id: "in1", waId: "966500000009", direction: "in", type: "text", text: "hi", timestamp: Math.floor(Date.now() / 1000) });
+  const sent: Record<string, unknown>[] = [];
+  let reject = false;
+  const graph = {
+    sendMessage: async (_to: string, p: Record<string, unknown>) => {
+      if (reject && p.type === "interactive") throw new Error("rejected");
+      sent.push(p);
+      return { messageId: `m${sent.length}` };
+    },
+    markRead: async () => ({}),
+  };
+  const ch = officialChannel({ base: new MemoryRawKV(), store, graph, normalize: (s) => s, state: new MemoryRawKV() });
+  await ch.sendText("966500000009", "اقرأ [المقال](https://ziadah.app/a)");
+  assert.equal(sent[0].type, "interactive");
+  reject = true;
+  await ch.sendText("966500000009", "اقرأ [المقال](https://ziadah.app/a)");
+  assert.deepEqual(sent[1], { type: "text", text: { body: "اقرأ المقال: https://ziadah.app/a" } });
+  const saved = await store.messages("966500000009", 5);
+  assert.ok(saved.some((m) => m.type === "interactive" && m.text?.includes("[المقال: https://ziadah.app/a]")));
+  // the support-ticket reply carries the picture of the help button
+  const { ticketImage } = await import("./flows/links");
+  assert.equal(ticketImage("ارفع تذكرة من لوحة زيادة", "https://x.app"), "https://x.app/help/ticket.png");
+  assert.equal(ticketImage("حياك الله", "https://x.app"), undefined);
+  assert.equal(ticketImage("ارفع تذكرة", ""), undefined);
+  assert.deepEqual((ctaPayload({ body: "b", label: "l", url: "https://u.example" }, "https://x.app/help/ticket.png").interactive as any).header, { type: "image", image: { link: "https://x.app/help/ticket.png" } });
+  const prev = process.env.APP_URL;
+  process.env.APP_URL = "https://x.app";
+  reject = false;
+  await ch.sendText("966500000009", "حياك الله، ارفع تذكرة من [لوحة زيادة](https://web.ziadah.app/login)");
+  assert.equal((sent[2].interactive as any).header.image.link, "https://x.app/help/ticket.png");
+  if (prev === undefined) delete process.env.APP_URL; else process.env.APP_URL = prev;
+});
+
+test("official ai replies are told how to name link buttons; personal ones are not", async () => {
+  const { LINK_RULE, CLOSING_RULE } = await import("./flows/links");
+  for (const kind of ["official", "personal"] as const) {
+    const systems: string[] = [];
+    const ai: AiClient = async (r) => (systems.push(r.system), "تمام");
+    const { deps, store } = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"] })], { ai });
+    deps.channel = { ...deps.channel, kind };
+    const m = msg();
+    await store.saveMessage(m);
+    await runFlows(deps, [m], NOW);
+    assert.equal(systems.length, 1, kind);
+    assert.equal(systems[0].includes(LINK_RULE), kind === "official", kind);
+    assert.equal(systems[0].includes(CLOSING_RULE), kind === "official", kind);
+  }
+});
+
+test("one follow-up when the merchant has been quiet for 20 hours and we wrote last", async () => {
+  const { sendFollowups, FOLLOWUP_TEXT } = await import("./flows/followup");
+  const now = 1_800_000_000;
+  const store = new Store(new MemoryKV());
+  const state = new MemoryRawKV();
+  const sent: string[] = [];
+  const channel: Channel = { account: "official", kind: "official", sendText: async (c, t) => (sent.push(`${c}:${t}`), "x"), react: async () => {}, markRead: async () => {}, resolveTarget: (s) => s };
+  const conv = async (waId: string, inAgoH: number, out?: string) => {
+    await store.saveMessage({ id: `${waId}-in`, waId, direction: "in", type: "text", text: "سؤال", timestamp: now - inAgoH * 3600 });
+    if (out) await store.saveMessage({ id: `${waId}-out`, waId, direction: "out", type: "text", text: out, timestamp: now - inAgoH * 3600 + 60, status: "sent" });
+  };
+  await conv("966500000001", 20.5, "متى يناسبك الاجتماع؟"); // due
+  await conv("966500000002", 10, "متى يناسبك؟"); // too early
+  await conv("966500000003", 23.8, "متى يناسبك؟"); // window about to close
+  await conv("966500000004", 21); // merchant wrote last
+  await conv("966500000005", 21, "تمام\n\nجاري تحويلك للفريق المختص"); // handed off
+  await store.saveMessage({ id: "t6-in", waId: "966500000006", direction: "in", type: "text", text: "تمام", timestamp: now - 21 * 3600 });
+  await store.saveMessage({ id: "t6-out", waId: "966500000006", direction: "out", type: "text", text: "ان شاء الله ابشر", timestamp: now - 21 * 3600 + 60, source: "business_app" }); // the team wrote last
+  const d = { store, state, channel };
+  assert.deepEqual(await sendFollowups(d, now), ["966500000001"]);
+  assert.deepEqual(sent, [`966500000001:${FOLLOWUP_TEXT}`]);
+  assert.deepEqual(await sendFollowups(d, now + 600), []); // only once
+});
+
+test("free slots respect Riyadh working hours, notice, gaps and busy time", async () => {
+  const { freeSlots, localIso, cleanSettings, atLocal, spread } = await import("./gcal");
+  const s = cleanSettings({ days: [0, 1, 2, 3, 4], start: "10:00", end: "12:00", minutes: 30, gap: 15, noticeHours: 2, aheadDays: 2, tz: "Asia/Riyadh" });
+  // Thursday 29 Oct 2026, 08:30 Riyadh (05:30Z)
+  const now = Date.UTC(2026, 9, 29, 5, 30);
+  assert.equal(atLocal(2026, 10, 29, "10:30", "Asia/Riyadh"), Date.UTC(2026, 9, 29, 7, 30));
+  const busy = [{ start: Date.UTC(2026, 9, 29, 8, 30), end: Date.UTC(2026, 9, 29, 9, 0) }]; // 11:30-12:00 local
+  const slots = freeSlots(s, busy, now).map((t) => localIso(t, s.tz));
+  // slots step 30+15 from 10:00: 10:00 is inside the 2h notice, 11:30 is busy; Fri/Sat are off; Sunday is past aheadDays
+  assert.deepEqual(slots, ["2026-10-29T10:45"]);
+  const wide = cleanSettings({ ...s, aheadDays: 4, end: "16:00" });
+  const offer = spread(freeSlots(wide, [], now, 60), wide.tz).map((t) => localIso(t, wide.tz));
+  assert.deepEqual(offer, ["2026-10-29T10:45", "2026-10-29T15:15", "2026-11-01T10:00", "2026-11-01T15:15", "2026-11-02T10:00", "2026-11-02T15:15"]);
+});
+
+test("a [[BOOK]] marker books a free slot; a taken or unknown time hands over to the team", async () => {
+  const { meetings, HANDOFF } = await import("./flows/meetings");
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r", email: "team@ziadah.app" }));
+  await base.set("meta:gcal:settings", JSON.stringify({ noticeHours: 2 }));
+  const now = Date.UTC(2026, 9, 29, 5, 30);
+  const booked: any[] = [];
+  const cal: any = { busy: async () => [], book: async (o: any) => (booked.push(o), { id: "e1", start: o.start, end: o.end, meet: "https://meet.google.com/abc-defg-hij" }) };
+  const m = meetings(base, undefined, () => now, cal);
+  const ctx = await m.context();
+  assert.match(ctx, /\[2026-10-29T10:45\]/);
+  const out = await m.apply("تمام أبشر [[BOOK 2026-10-29T10:45 sara@shop.sa]]", "966500000001", "Sara");
+  assert.equal(booked.length, 1);
+  assert.equal(booked[0].email, "sara@shop.sa");
+  assert.equal(booked[0].start, Date.UTC(2026, 9, 29, 7, 45));
+  assert.match(out, /^تم حجز موعدنا .+ بإذن الله، ووصلتك دعوة على sara@shop\.sa\.\n\[دخول الاجتماع\]\(https:\/\/meet\.google\.com\/abc-defg-hij\)$/);
+  assert.ok(!out.includes("[[BOOK"));
+  assert.ok((await m.apply("[[BOOK 2026-10-29T10:35 sara@shop.sa]]", "966500000001")).endsWith(HANDOFF));
+  assert.ok((await m.apply("[[BOOK 2026-10-29T10:45 not-an-email]]", "966500000001")).endsWith(HANDOFF));
+  assert.equal(booked.length, 1);
+  assert.equal(await m.apply("بدون حجز", "966500000001"), "بدون حجز");
+  assert.equal(await meetings(new MemoryRawKV(), undefined, () => now, cal).context(), "");
+  assert.match(ctx, /store link/);
+});
+
+test("the merchant's store link goes into the meeting details", async () => {
+  const { meetings, siteUrl } = await import("./flows/meetings");
+  assert.equal(siteUrl("albaraka.sa"), "https://albaraka.sa");
+  assert.equal(siteUrl("https://zid.store/albaraka/"), "https://zid.store/albaraka");
+  assert.equal(siteUrl("hotmail.com"), undefined);
+  assert.equal(siteUrl("https://meet.google.com/x"), undefined);
+  assert.equal(siteUrl("لا"), undefined);
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r" }));
+  await base.set("meta:gcal:settings", JSON.stringify({ noticeHours: 2 }));
+  const store = new Store(new MemoryKV());
+  const now = Date.UTC(2026, 9, 29, 5, 30);
+  const booked: any[] = [];
+  const cal: any = { busy: async () => [], events: async () => [], book: async (o: any) => (booked.push(o), { id: "e" + booked.length, start: o.start, end: o.end }) };
+  const m = meetings(base, store, () => now, cal);
+  await m.apply("[[BOOK 2026-10-29T10:45 sara@shop.sa https://sara.store]]", "966500000001");
+  assert.equal(booked[0].store, "https://sara.store");
+  // no link in the marker: the last store link the merchant wrote, never the domain of their email
+  await store.saveMessage({ id: "s1", waId: "966500000002", direction: "in", type: "text", text: "متجري albaraka.sa", timestamp: now / 1000 - 60 });
+  await store.saveMessage({ id: "s2", waId: "966500000002", direction: "in", type: "text", text: "Wmsb1@hotmail.com", timestamp: now / 1000 });
+  await m.apply("[[BOOK 2026-10-29T11:30 wmsb1@hotmail.com]]", "966500000002");
+  assert.equal(booked[1].store, "https://albaraka.sa");
+  await m.apply("[[BOOK 2026-11-01T10:00 x@y.sa]]", "966500000003");
+  assert.equal(booked[2].store, undefined);
+});
+
+test("a merchant who already has a meeting gets its time and link, never a second booking", async () => {
+  const { meetings } = await import("./flows/meetings");
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r" }));
+  const store = new Store(new MemoryKV());
+  const now = Date.UTC(2026, 9, 29, 5, 30);
+  const start = Date.UTC(2026, 9, 29, 11, 0); // 14:00 Riyadh
+  // the team added it by hand: no guest, no phone, no link, only the store name in the title
+  const team = { id: "t1", start, end: start + 1800000, summary: "اجتماع متجر عسل البركة", text: "\n" };
+  const other = { id: "t2", start: start + 7200000, end: start + 9000000, summary: "اجتماع متابعة متجر رحيق للعسل", text: "\n" };
+  const booked: any[] = [];
+  const cal: any = { busy: async () => [], events: async () => [team, other], book: async (o: any) => (booked.push(o), { id: "e1", start: o.start, end: o.end }) };
+  const m = meetings(base, store, () => now, cal);
+  const ctx = await m.context("966545432944", "أبو صلاح (متجر البركة )");
+  assert.match(ctx, /already has a meeting/);
+  assert.ok(!ctx.includes("Free times"));
+  const out = await m.apply("تمام [[BOOK 2026-10-29T10:45 wmsb1@hotmail.com]]", "966545432944", "أبو صلاح (متجر البركة )");
+  assert.equal(booked.length, 0);
+  assert.match(out, /^موعدنا محجوز لك من قبل .+ بإذن الله، والفريق بيرسل لك رابط الاجتماع قبل الموعد$/);
+  // another honey store does not match on the shared word
+  assert.match(await m.context("966500000009", "متجر عسل الشفاء"), /Free times/);
+  // a Zaid booking with the merchant's email, found by the guest email they wrote in the chat
+  await store.saveMessage({ id: "i1", waId: "966500000007", direction: "in", type: "text", text: "Sara@Shop.sa", timestamp: now / 1000 });
+  cal.events = async () => [{ id: "z1", start, end: start + 1800000, emails: ["sara@shop.sa"], meet: "https://meet.google.com/abc" }];
+  const again = await m.apply("[[BOOK 2026-10-29T10:45 sara@shop.sa]]", "966500000007", "Sara");
+  assert.equal(booked.length, 0);
+  assert.ok(again.endsWith("\n[دخول الاجتماع](https://meet.google.com/abc)"));
+});
+
+test("meeting reminder goes once, 45 minutes before, only inside the 24h window", async () => {
+  const { sendMeetingReminders } = await import("./flows/meetings");
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r" }));
+  const store = new Store(new MemoryKV());
+  const state = new MemoryRawKV();
+  const sent: string[] = [];
+  const channel: Channel = { account: "official", kind: "official", sendText: async (c, t) => (sent.push(`${c}|${t}`), "x"), react: async () => {}, markRead: async () => {}, resolveTarget: (s) => s };
+  const start = Date.UTC(2026, 9, 29, 11, 0); // 14:00 Riyadh
+  const cal: any = { events: async () => [{ id: "e1", start, end: start + 1800000, chat: "966500000001", meet: "https://meet.google.com/x" }, { id: "e2", start, end: start + 1800000, chat: "966500000002" }] };
+  await store.saveMessage({ id: "i1", waId: "966500000001", direction: "in", type: "text", text: "تمام", timestamp: Math.floor(Date.UTC(2026, 9, 28, 20, 0) / 1000) });
+  await store.saveMessage({ id: "i2", waId: "966500000002", direction: "in", type: "text", text: "تمام", timestamp: Math.floor(Date.UTC(2026, 9, 27, 20, 0) / 1000) }); // window closed
+  const d = { base, store, state, channel };
+  assert.deepEqual(await sendMeetingReminders(d, Date.UTC(2026, 9, 29, 4, 0), cal), []); // 07:00 Riyadh
+  assert.deepEqual(await sendMeetingReminders(d, Date.UTC(2026, 9, 29, 10, 0), cal), []); // 60 min before
+  assert.deepEqual(await sendMeetingReminders(d, Date.UTC(2026, 9, 29, 10, 20), cal), ["966500000001"]); // 40 min before
+  assert.match(sent[0], /^966500000001\|حياك الله للتذكير\nموعدنا اليوم بإذن الله الساعة 2:00 مساءً\n\[دخول الاجتماع\]\(https:\/\/meet\.google\.com\/x\)$/);
+  assert.deepEqual(await sendMeetingReminders(d, Date.UTC(2026, 9, 29, 10, 35), cal), []);
+});
+
+test("meetings booked outside Zaid are matched to their chat by phone or email and confirmed once", async () => {
+  const { sendMeetingReminders } = await import("./flows/meetings");
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r" }));
+  const store = new Store(new MemoryKV());
+  const state = new MemoryRawKV();
+  const sent: string[] = [];
+  const channel: Channel = { account: "official", kind: "official", sendText: async (c, t) => (sent.push(`${c}|${t}`), "x"), react: async () => {}, markRead: async () => {}, resolveTarget: (s) => s };
+  const now = Date.UTC(2026, 9, 29, 6, 0); // 09:00 Riyadh, Thursday
+  const ts = Math.floor((now - 3600000) / 1000);
+  await store.saveMessage({ id: "a", waId: "966500000001", direction: "in", type: "text", text: "حجزت من الرابط", timestamp: ts });
+  await store.saveMessage({ id: "b", waId: "966500000002", direction: "in", type: "text", text: "ايميلي Sara@Shop.sa", timestamp: ts });
+  const sunday = Date.UTC(2026, 10, 1, 8, 0); // Sun 11:00 Riyadh
+  const today = Date.UTC(2026, 9, 29, 11, 0); // Thu 14:00 Riyadh
+  const cal: any = {
+    events: async () => [
+      { id: "p1", start: sunday, end: sunday + 1800000, created: now - 600000, text: "Phone number: +966 50 000 0001", emails: ["other@x.com"], meet: "https://meet.google.com/p" },
+      { id: "p2", start: today, end: today + 1800000, created: now - 600000, text: "", emails: ["sara@shop.sa"] },
+      { id: "p3", start: today, end: today + 1800000, created: now - 600000, text: "", emails: [] }, // personal, no guest
+      { id: "p4", start: today, end: today + 1800000, created: now - 9 * 86400000, text: "", emails: ["sara@shop.sa"] }, // old booking: reminder only
+    ],
+  };
+  const d = { base, store, state, channel };
+  const first = await sendMeetingReminders(d, now, cal);
+  assert.deepEqual(first, ["966500000001", "966500000002"]);
+  assert.match(sent[0], /^966500000001\|حياك الله، تم تأكيد موعدنا .+ بإذن الله\n\[دخول الاجتماع\]\(https:\/\/meet\.google\.com\/p\)$/);
+  assert.match(sent[1], /^966500000002\|حياك الله، تم تأكيد موعدنا/);
+  assert.deepEqual(await sendMeetingReminders(d, now + 900000, cal), []);
+  // 40 minutes before today's meetings: the reminder for the email-matched chat
+  assert.deepEqual(await sendMeetingReminders(d, today - 40 * 60000, cal), ["966500000002", "966500000002"]);
+  assert.match(sent[2], /^966500000002\|حياك الله للتذكير\nموعدنا اليوم بإذن الله الساعة 2:00 مساءً$/);
+});
+
+test("an unanswered last message gets one more AI pass inside the window, after a short wait", async () => {
+  const { catchUpUnanswered } = await import("./flows/engine");
+  const now = NOW;
+  const ai: AiClient = async () => "حياك الله، أبشر";
+  const { deps, sent, store } = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"] })], { ai });
+  const s = Math.floor(now / 1000);
+  const chat2 = "966500000002@s.whatsapp.net";
+  const chat3 = "966500000003@s.whatsapp.net";
+  const chat4 = "966500000004@s.whatsapp.net";
+  await store.saveMessage(msg({ id: "u1", timestamp: s - 3 * 3600 })); // unanswered, due
+  await store.saveMessage(msg({ id: "u2", waId: chat2, timestamp: s - 120 })); // too fresh
+  await store.saveMessage(msg({ id: "u3", waId: chat3, timestamp: s - 23.8 * 3600 })); // window nearly closed
+  await store.saveMessage(msg({ id: "u4", waId: chat4, timestamp: s - 3 * 3600 }));
+  await store.saveMessage({ id: "o4", waId: chat4, direction: "out", type: "text", text: "تم", timestamp: s - 3 * 3600 + 60 }); // answered
+  const logs = await catchUpUnanswered(deps, now);
+  assert.equal(logs.length, 1);
+  assert.deepEqual(sent.map((x) => x.chat), [CHAT]);
+  assert.equal((await catchUpUnanswered(deps, now + 60_000)).length, 0); // once per message
+  const chat5 = "966500000005@s.whatsapp.net";
+  await store.saveMessage(msg({ id: "u5", waId: chat5, timestamp: s - 3600 }));
+  await deps.state.set("flow:seen:f1:u5", "1");
+  assert.equal((await catchUpUnanswered(deps, now + 120_000)).length, 0); // already skipped by the live flow
+});
+
+test("handoffs outside team hours give the working hours", async () => {
+  const { withHours, offHours, OFF_HOURS_LINE, UNSURE_LINE } = await import("./flows/links");
+  const at = (iso: string) => Date.parse(iso);
+  // Sunday 10:00 Riyadh is 07:00 UTC
+  assert.equal(offHours(at("2026-11-01T07:00:00Z")), false);
+  assert.equal(offHours(at("2026-11-01T14:00:00Z")), true); // 17:00 Riyadh
+  assert.equal(offHours(at("2026-11-01T05:59:00Z")), true); // 08:59 Riyadh
+  assert.equal(offHours(at("2026-10-30T07:00:00Z")), true); // Friday
+  assert.equal(offHours(at("2026-10-31T07:00:00Z")), true); // Saturday
+  const handoff = "سؤالك عن الفاتورة، جاري تحويلك للفريق المختص\n\nان لم تتلقى رد خلال 24 ساعة، فضلاً عاود الإرسال";
+  const fri = at("2026-10-30T07:00:00Z");
+  assert.equal(withHours(handoff, fri), `سؤالك عن الفاتورة.\n\n${OFF_HOURS_LINE}`);
+  assert.equal(withHours("جاري تحويلك للفريق المختص\n\nان لم", fri), `حياك الله، ${OFF_HOURS_LINE}`);
+  assert.equal(withHours(UNSURE_LINE, fri), `حياك الله، ${OFF_HOURS_LINE}`);
+  assert.equal(withHours("العفو، حاضرين لأي استفسار.", fri), "العفو، حاضرين لأي استفسار.");
+  assert.equal(withHours(handoff, at("2026-11-01T07:00:00Z")), handoff);
+});
+
+test("Zaid books meetings at least 12 hours ahead by default", async () => {
+  const { DEFAULT_SETTINGS, freeSlots } = await import("./gcal");
+  const now = Date.UTC(2026, 10, 1, 20, 52); // Sunday 23:52 Riyadh
+  const slots = freeSlots(DEFAULT_SETTINGS, [], now);
+  assert.ok(slots.length > 0);
+  assert.ok(slots.every((t) => t >= now + 12 * 3600_000));
+});
+
+test("the 16:00 slot is offered whenever it is free, and the day ends at 16:30", async () => {
+  const { DEFAULT_SETTINGS, freeSlots, spread, localIso } = await import("./gcal");
+  assert.equal(DEFAULT_SETTINGS.end, "16:30");
+  const now = Date.UTC(2026, 10, 1, 5, 0); // Sunday 08:00 Riyadh, so Monday is 12+ hours away
+  const s = { ...DEFAULT_SETTINGS, aheadDays: 1 };
+  const mon = freeSlots(s, [], now, 60).map((t) => localIso(t, s.tz)).filter((x) => x.startsWith("2026-11-02"));
+  assert.ok(mon.includes("2026-11-02T16:00"));
+  const offer = spread(freeSlots(s, [], now, 60), s.tz).map((t) => localIso(t, s.tz));
+  assert.ok(offer.includes("2026-11-02T16:00"));
+  // a meeting already at 16:00 keeps that slot out
+  const busy = [{ start: Date.UTC(2026, 10, 2, 13, 0), end: Date.UTC(2026, 10, 2, 13, 30) }];
+  assert.ok(!freeSlots(s, busy, now, 60).map((t) => localIso(t, s.tz)).includes("2026-11-02T16:00"));
+});
+
+test("team ownership: a team answer holds the chat for a day; broadcasts and the app's away message do not", async () => {
+  const { teamRepliedAt, newerInbound } = await import("./flows/links");
+  const m = (id: string, direction: "in" | "out", timestamp: number, text = "x", source?: "business_app" | "api") => ({ id, direction, type: "text", text, timestamp, source });
+  assert.equal(teamRepliedAt([m("b", "out", 100, "اشتراكك ينتهي", "business_app"), m("q", "in", 200)]), undefined);
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("t", "out", 160, "الالغاء من زد", "business_app")]), 160);
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("a", "out", 120, "حياك الله، كيف اساعدك اليوم؟", "business_app")]), undefined);
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("z", "out", 110, "رد زيد", "api")]), undefined);
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("b", "out", 100 + 2 * 86400, "حملة", "business_app")]), undefined);
+  // a reminder campaign the next morning, after Zaid already answered, is not the team taking the chat
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("z", "out", 110, "تم حجز موعدنا", "api"), m("r", "out", 100 + 19 * 3600, "تذكير باقي يوم على العرض", "business_app")]), undefined);
+  // ... but stepping in a few minutes after Zaid's answer is
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("z", "out", 110, "رد زيد", "api"), m("t", "out", 460, "لو حابين جدولة اجتماع", "business_app")]), 460);
+  assert.equal(teamRepliedAt([m("q", "in", 100), m("t", "out", 160, "أبشر", "business_app"), m("t2", "out", 100 + 5 * 3600, "تم", "business_app")]), 100 + 5 * 3600);
+  const burst = [m("a", "in", 100), m("b", "in", 100), m("z", "out", 101, "رد", "api")];
+  assert.equal(newerInbound(burst, "a"), true);
+  assert.equal(newerInbound(burst, "b"), false);
+  assert.equal(newerInbound(burst, "missing"), false);
+});
+
+test("official Zaid: one reply per burst, waits 15 minutes in a chat the team answered, and never sends foreign letters", async () => {
+  const HOURS = NOW + 18 * 3600_000; // Tuesday 11:13 Riyadh, inside team hours
+  const { UNSURE_LINE, STRICT_RULE } = await import("./flows/links");
+  const official = (reply: string[]) => {
+    const systems: string[] = [];
+    const ai: AiClient = async (r) => (systems.push(r.system), reply.shift() ?? "تمام");
+    const s = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSecs: 0 } as never)], { ai });
+    s.deps.channel = { ...s.deps.channel, kind: "official" };
+    return { ...s, systems };
+  };
+  const t = Math.floor(HOURS / 1000);
+
+  // two messages in the same second: only the newer one is answered
+  {
+    const { deps, store, sent, systems } = official(["الرد"]);
+    const a = msg({ id: "a1", text: "بالتدقيق", timestamp: t - 30 }), b = msg({ id: "b1", text: "ممكن الأرقام", timestamp: t - 30 });
+    await store.saveMessage(a);
+    await store.saveMessage(b);
+    await runFlows(deps, [a, b], HOURS);
+    assert.equal(sent.length, 1);
+    assert.equal(systems.length, 1);
+    assert.ok(systems[0].includes(STRICT_RULE));
+  }
+  // the team answered 31 minutes ago: the merchant's new message waits 15 minutes for the team, then Zaid answers
+  {
+    const { catchUpUnanswered } = await import("./flows/engine");
+    const { deps, store, sent, systems } = official(["رد زيد"]);
+    await store.saveMessage(msg({ id: "q0", timestamp: t - 40 * 60 }));
+    await store.saveMessage({ id: "t0", waId: CHAT, direction: "out", type: "text", text: "الالغاء من زد", timestamp: t - 31 * 60, source: "business_app" });
+    const m = msg({ id: "q1", timestamp: t - 30 });
+    await store.saveMessage(m);
+    await runFlows(deps, [m], HOURS);
+    assert.equal(sent.length, 0);
+    assert.equal(systems.length, 0);
+    // the app's away message right after it is not an answer
+    await store.saveMessage({ id: "aw", waId: CHAT, direction: "out", type: "text", text: "حياك الله، كيف اساعدك اليوم؟", timestamp: t - 29, source: "business_app" });
+    assert.equal((await catchUpUnanswered(deps, HOURS + 10 * 60_000)).length, 0); // still inside the 15 minutes
+    await catchUpUnanswered(deps, HOURS + 15 * 60_000);
+    assert.deepEqual(sent.map((x) => x.text), ["رد زيد"]);
+  }
+  // ... but if the team answers inside the 15 minutes, Zaid sends nothing
+  {
+    const { catchUpUnanswered } = await import("./flows/engine");
+    const { deps, store, sent } = official(["رد زيد"]);
+    await store.saveMessage(msg({ id: "r0", timestamp: t - 40 * 60 }));
+    await store.saveMessage({ id: "rt", waId: CHAT, direction: "out", type: "text", text: "أبشر", timestamp: t - 31 * 60, source: "business_app" });
+    const m = msg({ id: "r1", timestamp: t - 30 });
+    await store.saveMessage(m);
+    await runFlows(deps, [m], HOURS);
+    await store.saveMessage({ id: "rt2", waId: CHAT, direction: "out", type: "text", text: "تم", timestamp: t + 300, source: "business_app" });
+    await catchUpUnanswered(deps, HOURS + 16 * 60_000);
+    assert.equal(sent.length, 0);
+  }
+  // a reply to the team's own outreach or campaign waits 15 minutes for the team, then Zaid answers
+  {
+    const { catchUpUnanswered } = await import("./flows/engine");
+    const { deps, store, sent } = official(["رد زيد"]);
+    await store.saveMessage({ id: "bc", waId: CHAT, direction: "out", type: "text", text: "ممكن توصلني بالمسؤول عن التطبيقات؟", timestamp: t - 40 * 60, source: "business_app" });
+    const m = msg({ id: "b2", text: "تفضل ياغالي كيف أقدر اخدمك", timestamp: t - 30 });
+    await store.saveMessage(m);
+    await runFlows(deps, [m], HOURS);
+    assert.equal(sent.length, 0);
+    await catchUpUnanswered(deps, HOURS + 15 * 60_000);
+    assert.equal(sent.length, 1);
+  }
+  // after Zaid answered, a new merchant message is Zaid's again even with an old team message further up
+  {
+    const { deps, store, sent } = official(["رد زيد"]);
+    await store.saveMessage({ id: "o1", waId: CHAT, direction: "out", type: "text", text: "تذكير بالعرض", timestamp: t - 30 * 3600, source: "business_app" });
+    await store.saveMessage({ id: "o2", waId: CHAT, direction: "in", type: "text", text: "شكرا", timestamp: t - 29 * 3600 });
+    await store.saveMessage({ id: "o3", waId: CHAT, direction: "out", type: "text", text: "العفو", timestamp: t - 29 * 3600 + 60, source: "api" });
+    const m = msg({ id: "o4", text: "هل الباقة فيها كوبونات؟", timestamp: t - 30 });
+    await store.saveMessage(m);
+    await runFlows(deps, [m], HOURS);
+    assert.equal(sent.length, 1);
+  }
+  // Korean letters in the output: asked again once, then handed to the team
+  {
+    const { deps, store, sent, systems } = official(["وضح لكم 경로 الإلغاء", "다시 경로"]);
+    const m = msg({ id: "k1", timestamp: t - 30 });
+    await store.saveMessage(m);
+    await runFlows(deps, [m], HOURS);
+    assert.equal(systems.length, 2);
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].text.includes("الفريق") && !/[가-힯]/.test(sent[0].text));
+    assert.ok(sent[0].text === UNSURE_LINE || sent[0].text.includes("ساعات العمل"));
+  }
+});
+
+test("official Zaid ignores the per-chat cooldown, so a follow-up question is still answered", async () => {
+  const { DIRECT_RULE, PLANS_RULE, TICKET_RULE } = await import("./flows/links");
+  const systems: string[] = [];
+  const ai: AiClient = async (r) => (systems.push(r.system), "رد");
+  const { deps, store, sent } = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSeconds: 600 })], { ai });
+  deps.channel = { ...deps.channel, kind: "official" };
+  const t = Math.floor(NOW / 1000);
+  const a = msg({ id: "g1", text: "السلام عليكم", timestamp: t - 60 });
+  await store.saveMessage(a);
+  await runFlows(deps, [a], NOW - 50_000);
+  await store.saveMessage({ id: "z1", waId: CHAT, direction: "out", type: "text", text: "حياك الله", timestamp: t - 50, source: "api" });
+  const b = msg({ id: "g2", text: "بكم السنة؟", timestamp: t - 30 });
+  await store.saveMessage(b);
+  await runFlows(deps, [b], NOW);
+  assert.equal(sent.length, 2);
+  assert.ok(systems[1].includes(DIRECT_RULE));
+  assert.ok(systems[1].includes(PLANS_RULE));
+  assert.ok(systems[1].includes(TICKET_RULE));
+  assert.match(TICKET_RULE, /سلة \(Salla\) → https:\/\/dashboard\.ziadah\.app\/login, زد \(Zid\) → https:\/\/web\.ziadah\.app\/login/);
+  // Growth must never be described as having free-shipping reach.
+  const growth = PLANS_RULE.split("\n").find((l) => l.startsWith("- النمو"))!;
+  assert.ok(growth.split("لا تشمل")[1].includes("الوصول للشحن المجاني"));
+});
+
+test("merchant lookup: the sheet row for this phone becomes a <merchant> block for Zaid", async () => {
+  const { buildIndex, normPhone, merchantContext, findMerchant } = await import("./merchants");
+  assert.equal(normPhone("0510655869"), "966510655869");
+  assert.equal(normPhone("+966 51 065 5869"), "966510655869");
+  const head = ["Store ID", "Store Name", "Phone", "Email", "Platform", "Plan", "End Date", "Subscription Status"];
+  const ix = buildIndex([{ values: [head, ["147887", "متجر نسمتي", "966501253332 / 966510655869", "a@b.c", "زد", "النمو الشهرية", "2026-11-25", "paid"]] }]);
+  assert.equal(ix["966510655869"][0].store, "متجر نسمتي");
+  assert.equal(ix["966501253332"][0].plan, "النمو الشهرية");
+  const block = merchantContext(ix["966510655869"]);
+  assert.match(block, /المتجر: متجر نسمتي، المنصة: زد، الباقة: النمو الشهرية، ينتهي الاشتراك: 2026-11-25، الحالة: مشترك \(مدفوع\)/);
+  assert.ok(!block.includes("a@b.c"));
+  assert.equal(merchantContext([]), "");
+  // read once through Google Sheets, then served from the cache
+  const kv = new MemoryRawKV();
+  await kv.set("meta:gcal:token", JSON.stringify({ refresh: "r", access: "tok", exp: Date.now() + 3600_000 }));
+  let calls = 0;
+  const fetchImpl = (async (url: string) => {
+    calls++;
+    assert.match(String(url), /sheets\.googleapis\.com/);
+    return new Response(JSON.stringify({ valueRanges: [{ values: [head, ["1", "متجر نسمتي", "966510655869", "", "زد", "النمو", "", "paid"]] }] }));
+  }) as typeof fetch;
+  assert.equal((await findMerchant(kv, "966510655869", {}, fetchImpl))[0].store, "متجر نسمتي");
+  assert.equal((await findMerchant(kv, "966500000000", {}, fetchImpl)).length, 0);
+  assert.equal(calls, 1);
+});
+
+test("an unasked offer at the end of Zaid's reply is dropped", async () => {
+  const { dropOffer } = await import("./flows/links");
+  assert.equal(dropOffer("حياك الله، الذكاء الاصطناعي متاح في باقتك النمو السنوية. تبين نراجع لك وش المتاح في باقتك بالضبط؟"), "حياك الله، الذكاء الاصطناعي متاح في باقتك النمو السنوية.");
+  assert.equal(dropOffer("حياك الله، الأرقام موجودة في اللوحة. تحب أوضح لك طريقة تفعيل التجديد؟"), "حياك الله، الأرقام موجودة في اللوحة.");
+  assert.equal(dropOffer("تبي تفعّله الآن؟"), "تبي تفعّله الآن؟"); // nothing else to keep
+  assert.equal(dropOffer("متى يناسبك الاجتماع؟"), "متى يناسبك الاجتماع؟");
+  assert.equal(dropOffer("حياك الله، العفو، حاضرين لأي استفسار."), "حياك الله، العفو، حاضرين لأي استفسار.");
+});
+
+test("meeting talk: Zaid answers a merchant arranging a time at once, even while the team is in the chat", async () => {
+  const { meetingTalk } = await import("./flows/links");
+  const m = (id: string, direction: "in" | "out", timestamp: number, text: string, source?: "business_app" | "api") => ({ id, direction, type: "text", text, timestamp, source });
+  const chat = [
+    m("t1", "out", 100, "لو حابين جدولة اجتماع مع المختص حاضرين", "business_app"),
+    m("i1", "in", 460, "ممتاز . اليوم مناسب على ٤ إذا متاح"),
+    m("i2", "in", 1000, "٣ وقت صلاة غير مناسب"),
+    m("t2", "out", 1001, "ابشر", "business_app"),
+    m("i3", "in", 1002, "حسب المتاح عندكم"),
+    m("t3", "out", 1060, "4 اتضح وجود حجز سابق لكن مجرد الانتهاء ببلغك وندخل اجتماعنا", "business_app"),
+    m("i4", "in", 1070, "تمام .. شكرا"),
+  ];
+  assert.equal(meetingTalk(chat, "i1"), true);
+  assert.equal(meetingTalk(chat, "i3"), true);
+  assert.equal(meetingTalk(chat, "i4"), false); // thanks after the team set it stays with the team
+  // the email the team asked for to book the meeting is meeting talk too
+  assert.equal(meetingTalk([m("t0", "out", -2000, "لو تحب تدخل اجتماع 10 دقايق", "business_app"), m("t", "out", 0, "اكيد ابشر ممكن ايميلك نجدول الوقت", "business_app"), m("e", "in", 300, "abdulazizrashidalghanim@gmail.com")], "e"), true);
+  assert.equal(meetingTalk([m("x", "out", 0, "أبشر", "business_app"), m("y", "in", 10, "كم سعر النمو؟")], "y"), false);
+  assert.equal(meetingTalk([m("x", "out", 0, "متى يناسبك الاجتماع؟", "business_app"), m("y", "in", 9000, "بكره")], "y"), false); // over two hours
+
+  const ai: AiClient = async () => "هذي الأوقات المتاحة";
+  const s = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSecs: 0 } as never)], { ai });
+  s.deps.channel = { ...s.deps.channel, kind: "official" };
+  s.deps.meetings = { context: async () => "Meetings: free times", apply: async (r: string) => r };
+  const t = Math.floor(NOW / 1000);
+  await s.store.saveMessage({ id: "tt", waId: CHAT, direction: "out", type: "text", text: "لو حابين جدولة اجتماع", timestamp: t - 120, source: "business_app" });
+  await s.store.saveMessage({ id: "tb", waId: CHAT, direction: "out", type: "text", text: "ابشر", timestamp: t - 40, source: "business_app" });
+  const q = msg({ id: "q", text: "حسب المتاح عندكم", timestamp: t - 30 });
+  await s.store.saveMessage(q);
+  await runFlows(s.deps, [q], NOW);
+  assert.deepEqual(s.sent.map((x) => x.text), ["هذي الأوقات المتاحة"]);
+});
+
+test("a [[MOVE]] marker moves the merchant's Zaid-booked meeting to a free time; a team meeting stays with the team", async () => {
+  const { meetings, HANDOFF } = await import("./flows/meetings");
+  const base = new MemoryRawKV();
+  await base.set("meta:gcal:token", JSON.stringify({ refresh: "r" }));
+  await base.set("meta:gcal:settings", JSON.stringify({ noticeHours: 2 }));
+  const store = new Store(new MemoryKV());
+  const now = Date.UTC(2026, 9, 29, 5, 30);
+  const start = Date.UTC(2026, 9, 29, 7, 45); // 10:45 Riyadh, booked by Zaid
+  const ev = { id: "z1", start, end: start + 1800000, chat: "966500000001", meet: "https://meet.google.com/abc" };
+  const moved: any[] = [];
+  const cal: any = {
+    busy: async () => [{ start: ev.start, end: ev.end }],
+    events: async () => [ev],
+    book: async () => assert.fail("never books a second meeting"),
+    move: async (id: string, s: number, e: number) => (moved.push({ id, s, e }), { ...ev, start: s, end: e }),
+  };
+  const m = meetings(base, store, () => now, cal);
+  const ctx = await m.context("966500000001");
+  assert.match(ctx, /already has a meeting/);
+  assert.match(ctx, /\[\[MOVE/);
+  assert.ok(!ctx.includes("[2026-10-29T10:45]")); // its own time is not offered again
+  const iso = /\[(2026-\d\d-\d\dT\d\d:\d\d)\]/.exec(ctx.split("Free times")[1])![1];
+  const out = await m.apply(`تمام [[MOVE ${iso}]]`, "966500000001");
+  assert.equal(moved.length, 1);
+  assert.equal(moved[0].id, "z1");
+  assert.match(out, /^تم تعديل موعدنا إلى .+ بإذن الله، ووصلك التحديث على الإيميل\.\n\[دخول الاجتماع\]\(https:\/\/meet\.google\.com\/abc\)$/);
+  assert.ok((await m.apply("[[MOVE 2026-10-29T03:00]]", "966500000001")).endsWith(HANDOFF));
+  // the team added this one by hand: Zaid does not move it
+  const team = { id: "t1", start, end: start + 1800000, summary: "اجتماع متجر عسل البركة", text: "\n" };
+  cal.events = async () => [team];
+  assert.match(await m.context("966545432944", "أبو صلاح (متجر البركة )"), /hand over to the team/);
+  assert.ok((await m.apply("[[MOVE 2026-10-29T11:30]]", "966545432944", "أبو صلاح (متجر البركة )")).endsWith(HANDOFF));
+  assert.equal(moved.length, 1);
+});
+
+test("the team said it is checking and went quiet for 15 minutes: Zaid sends one holding line", async () => {
+  const { catchUpUnanswered } = await import("./flows/engine");
+  const { HOLD_LINE, teamPromise } = await import("./flows/links");
+  const ai: AiClient = async () => "لا يجب أن يرد";
+  const s = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSecs: 0 } as never)], { ai });
+  s.deps.channel = { ...s.deps.channel, kind: "official" };
+  const t = Math.floor(NOW / 1000);
+  await s.store.saveMessage(msg({ id: "p1", text: "الكود العشوائي انا استغربته مايظهر", timestamp: t - 60 }));
+  await s.store.saveMessage({ id: "p2", waId: CHAT, direction: "out", type: "text", text: "بتاكد بخصوصه الحين", timestamp: t - 50, source: "business_app" });
+  assert.equal((await catchUpUnanswered(s.deps, NOW + 10 * 60_000)).length, 0); // still inside the 15 minutes
+  await catchUpUnanswered(s.deps, NOW + 16 * 60_000);
+  await catchUpUnanswered(s.deps, NOW + 20 * 60_000);
+  assert.deepEqual(s.sent.map((x) => x.text), [HOLD_LINE]);
+  // a plain team answer, or a promise made with no merchant waiting, gets nothing
+  const m = (id: string, direction: "in" | "out", timestamp: number, text: string, source?: "business_app" | "api") => ({ id, direction, type: "text", text, timestamp, source });
+  assert.equal(teamPromise([m("a", "in", 0, "وش الأسعار"), m("b", "out", 10, "الباقات في الرابط", "business_app")]), undefined);
+  assert.equal(teamPromise([m("a", "in", 0, "شكرا"), m("b", "out", 5 * 3600, "بتاكد وارجع لك", "business_app")]), undefined);
+  assert.ok(teamPromise([m("a", "in", 0, "ما يظهر"), m("b", "out", 10, "لحظات اشيك عليه", "business_app")]));
+  // small talk and meeting invites are not a promise to check a problem
+  assert.equal(teamPromise([m("a", "in", 0, "اسفة جداً ماقدرت اتابع"), m("b", "out", 60, "ولايهمك انا معاك بتأكد ان امورك كلها تمام قبل لا اطلع", "business_app")]), undefined);
+  assert.equal(teamPromise([m("a", "in", 0, "audio"), m("b", "out", 60, "لو تحب تدخل اجتماع 10 دقايق نستعرض الخصائص", "business_app")]), undefined);
+});
+
+test("outside team hours Zaid answers a chat the team handled earlier, unless a team member is writing right now", async () => {
+  const ai: AiClient = async () => "رد زيد";
+  const mk = () => {
+    const s = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSecs: 0 } as never)], { ai });
+    s.deps.channel = { ...s.deps.channel, kind: "official" };
+    return s;
+  };
+  const at = Date.UTC(2026, 10, 4, 4, 30); // Wednesday 7:30 Riyadh, before hours
+  const t = at / 1000;
+  {
+    const s = mk();
+    await s.store.saveMessage(msg({ id: "a", text: "تاخذ وقت كثير؟", timestamp: t - 11 * 3600 - 60 }));
+    await s.store.saveMessage({ id: "b", waId: CHAT, direction: "out", type: "text", text: "حوالي 12 ل 24 ساعة", timestamp: t - 11 * 3600, source: "business_app" });
+    const q = msg({ id: "c", text: "تم التنفيذ؟", timestamp: t - 10 });
+    await s.store.saveMessage(q);
+    await runFlows(s.deps, [q], at);
+    assert.equal(s.sent.length, 1);
+  }
+  {
+    const s = mk();
+    await s.store.saveMessage(msg({ id: "a", text: "سؤال", timestamp: t - 300 }));
+    await s.store.saveMessage({ id: "b", waId: CHAT, direction: "out", type: "text", text: "أبشر", timestamp: t - 200, source: "business_app" });
+    const q = msg({ id: "c", text: "طيب ومتى؟", timestamp: t - 10 });
+    await s.store.saveMessage(q);
+    await runFlows(s.deps, [q], at);
+    assert.equal(s.sent.length, 0);
+  }
+});
+
+test("a team message from hours ago does not hold the merchant's next question", async () => {
+  const ai: AiClient = async () => "رد زيد";
+  const s = setup([mkFlow({ actions: [{ type: "ai_reply" }] as FlowDraft["actions"], cooldownSecs: 0 } as never)], { ai });
+  s.deps.channel = { ...s.deps.channel, kind: "official" };
+  const at = NOW + 18 * 3600_000; // Tuesday 11:13 Riyadh
+  const t = at / 1000;
+  await s.store.saveMessage(msg({ id: "a", text: "بجدد", timestamp: t - 16 * 3600 }));
+  await s.store.saveMessage({ id: "b", waId: CHAT, direction: "out", type: "text", text: "تمام وخبرني", timestamp: t - 15.5 * 3600, source: "business_app" });
+  const q = msg({ id: "c", text: "بكم", timestamp: t - 10 });
+  await s.store.saveMessage(q);
+  await runFlows(s.deps, [q], at);
+  assert.equal(s.sent.length, 1);
+});
+
+test("price answers follow the merchant's plan, with the annual offer only while it runs", async () => {
+  const { priceRule } = await import("./flows/links");
+  const on = priceRule(Date.UTC(2026, 10, 4, 9));
+  assert.match(on, /سنة \+ سنة مجاناً/);
+  assert.match(on, /النمو 249 شهري أو 2,990 سنوي/);
+  assert.match(on, /الانطلاقة is NOT in the offer/);
+  const off = priceRule(Date.UTC(2026, 10, 5, 21, 30)); // 6 Nov 00:30 Riyadh
+  assert.match(off, /There is no annual offer now/);
+  assert.ok(!off.includes("Current offer"));
+});
