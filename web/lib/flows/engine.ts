@@ -4,7 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { RawKV } from "../wa/auth";
-import type { Store, StoredMessage } from "../store";
+import type { Conversation, Store, StoredMessage } from "../store";
 import { assertPublicUrl } from "../net";
 import { AGENT_PROMPT, DEFAULT_REPLY_PROMPT, GUARD, KNOWLEDGE_RULES, SKIP, type AgentClient, type AgentFile, type AiClient } from "./ai";
 import type { Connector } from "../connectors";
@@ -12,6 +12,8 @@ import type { Attachment, Loaded } from "../files";
 import { extractFile } from "../kb/extract";
 import { MAX_WAITS, deleteWait, listWaits, pushLog, readQueue, saveDraft, saveWait, writeQueue } from "./storage";
 import { successors } from "./graph";
+import { answeredAfter, offHours, answersTeam, HOLD_LINE, teamPromise, CLOSING_RULE, DIRECT_RULE, dropOffer, EMAIL_RULE, FOREIGN_SCRIPT, GROUP_RULE, isAppAuto, lastTeamAt, LINK_RULE, MEETING_OWN_RULE, meetingTalk, newerInbound, PLANS_RULE, priceRule, STRICT_RULE, TICKET_RULE, TEAM_ACTIVE_SECS, TEAM_OWNS_SECS, TEAM_WAIT_SECS, teamRepliedAt, UNSURE_LINE, UNSURE_RULE, withHours } from "./links";
+import type { Meetings } from "./meetings";
 import type { Action, Cond, Flow, Graph, LogEntry, LogStep } from "./types";
 
 export type Channel = {
@@ -47,6 +49,10 @@ export type EngineDeps = {
   fetchImpl?: typeof fetch;
   /** the knowledge base context for a question (Claude actions only) */
   knowledge?: (query: string) => Promise<string>;
+  /** official number: free times from Google Calendar for Zaid, and booking the one picked */
+  meetings?: Meetings;
+  /** official number: what we know about the merchant writing (store, plan, dates), as a system-prompt block */
+  merchant?: (chat: string) => Promise<string>;
   /** validates webhook addresses; defaults to public-https-only with a DNS check */
   checkUrl?: (url: string) => Promise<string>;
 };
@@ -239,7 +245,8 @@ async function addTag(state: RawKV, chat: string, tag: string) {
 
 async function transcriptFor(x: Ctx, d: EngineDeps, a: { context: number; scope: "chat" | "recent"; hours: number }): Promise<string> {
   const line = (m: StoredMessage, chatName?: string) => {
-    const who = m.direction === "out" ? "Me" : m.senderName || (m.sender ? `+${m.sender}` : chatName || "Them");
+    // on the official number, replies typed in the WhatsApp Business app are the team's, not Zaid's
+    const who = m.direction === "out" ? (m.source === "business_app" ? "Team" : "Me") : m.senderName || (m.sender ? `+${m.sender}` : chatName || "Them");
     const t = localParts(m.timestamp * 1000, x.flow.tz).hhmm;
     return `[${t}] ${who}: ${(bodyOf(m) || `[${m.type}]`).slice(0, 800)}`;
   };
@@ -257,6 +264,31 @@ async function transcriptFor(x: Ctx, d: EngineDeps, a: { context: number; scope:
   return msgs.map((m) => line(m, x.chatName)).join("\n").slice(-6000);
 }
 
+/**
+ * Official number: whether Zaid answers this message now. "skip" when the merchant wrote again after it
+ * or someone already answered it; "wait" while the team is handling the chat and the message is not yet
+ * TEAM_WAIT_SECS old (the catch-up answers it later if nobody did).
+ */
+async function teamHold(d: EngineDeps, x: Ctx): Promise<"answer" | "wait" | "skip"> {
+  const m = x.msg;
+  if (!m) return "answer";
+  const recent = await d.store.messages(x.chat, 40);
+  if (newerInbound(recent, m.id) || answeredAfter(recent, m.id)) return "skip";
+  const nowS = x.now / 1000;
+  if (nowS - m.timestamp >= TEAM_WAIT_SECS) return "answer";
+  // Zaid holds the calendar, so a merchant arranging a meeting gets the free times now
+  if (d.meetings && meetingTalk(recent, m.id)) return "answer";
+  const replied = teamRepliedAt(recent), wrote = lastTeamAt(recent);
+  // outside team hours nobody picks the chat up, so Zaid only gives way to a team member writing right now
+  if (offHours(x.now)) return wrote && nowS - wrote < TEAM_WAIT_SECS ? "wait" : "answer";
+  // in hours, the team gets the first 15 minutes only while it is active in the chat: it wrote in the last hour.
+  // A team message from hours ago (yesterday's answer, a morning campaign) leaves the next question to Zaid at once.
+  if (!wrote || nowS - wrote >= TEAM_ACTIVE_SECS) return "answer";
+  // a merchant answering a team member's own message (an outreach, a question, a campaign) waits for that team member first
+  if (answersTeam(recent, m.id)) return "wait";
+  return (replied && nowS - replied < TEAM_OWNS_SECS) || nowS - wrote < TEAM_WAIT_SECS ? "wait" : "answer";
+}
+
 async function runAi(a: Extract<Action, { type: "ai" | "ai_reply" }>, x: Ctx, d: EngineDeps): Promise<string> {
   if (!d.ai) throw new Error("Set ANTHROPIC_API_KEY in Vercel to use Claude in flows.");
   if (!(await takeAi(d, x.now))) throw new Error("Daily Claude limit reached (AI_MAX_PER_DAY).");
@@ -267,6 +299,14 @@ async function runAi(a: Extract<Action, { type: "ai" | "ai_reply" }>, x: Ctx, d:
     const recent = (await d.store.messages(x.chat, 4)).filter((m) => m.direction === "in").map(bodyOf).join("\n");
     const kb = await d.knowledge(`${recent}\n${a.prompt ?? ""}`.trim());
     if (kb) system += `\n\n${KNOWLEDGE_RULES}\n\n<knowledge>\n${kb}\n</knowledge>`;
+  }
+  if (a.type === "ai_reply" && d.channel.kind === "official") {
+    system += `\n\n${LINK_RULE}\n\n${CLOSING_RULE}\n\n${UNSURE_RULE}\n\n${GROUP_RULE}\n\n${EMAIL_RULE}\n\n${STRICT_RULE}\n\n${DIRECT_RULE}\n\n${PLANS_RULE}\n\n${priceRule(x.now)}\n\n${TICKET_RULE}`;
+    const who = await d.merchant?.(x.chat).catch(() => "");
+    if (who) system += `\n\n${who}`;
+    const cal = await d.meetings?.context(x.chat, x.chatName).catch(() => "");
+    if (cal) system += `\n\n${cal}`;
+    if (cal && x.msg && meetingTalk(await d.store.messages(x.chat, 40), x.msg.id)) system += `\n\n${MEETING_OWN_RULE}`;
   }
   const task = a.type === "ai_reply" ? "Write my next reply to the last message from the other person." : "Do what the instructions above ask, using the conversation(s).";
   const out = await d.ai({ system, user: `<conversation>\n${transcript}\n</conversation>\n\n${task}`, maxTokens: a.maxTokens, model: a.model, provider: a.provider });
@@ -455,10 +495,25 @@ async function runActions(flow: Flow, x: Ctx, d: EngineDeps, mode: Flow["mode"],
         }
         case "ai_reply": {
           needChat(a.type);
-          const out = await runAi(a, x, d);
+          // a chat the team is handling waits for the team first; a burst gets one answer
+          const official = d.channel.kind === "official";
+          const hold = official ? await teamHold(d, x) : "answer";
+          if (hold === "wait" && x.msg) await d.state.set(`flow:wait:${x.msg.id}`, "1", { ex: 2 * 86400 });
+          let out = hold === "answer" ? await runAi(a, x, d) : SKIP;
+          // a broken model output (letters from another language) is asked again once, then handed to the team
+          if (official && FOREIGN_SCRIPT.test(out)) out = await runAi(a, x, d);
+          if (official && FOREIGN_SCRIPT.test(out)) out = UNSURE_LINE;
+          // the merchant may have written again, or the team answered, while the model was thinking
+          if (official && !out.includes(SKIP)) {
+            const again = await teamHold(d, x);
+            if (again === "wait" && x.msg) await d.state.set(`flow:wait:${x.msg.id}`, "1", { ex: 2 * 86400 });
+            if (again !== "answer") out = SKIP;
+          }
+          if (!out.includes(SKIP) && d.meetings && mode === "auto") out = await d.meetings.apply(out, x.chat, x.chatName);
+          if (!out.includes(SKIP) && d.channel.kind === "official") out = withHours(dropOffer(out), x.now);
           x.vars.ai = out === SKIP ? "" : out;
           output = x.vars.ai;
-          detail = out.includes(SKIP) ? "Claude chose not to reply" : await deliver(x.chat, out, a.quote ? x.msg?.id : undefined);
+          detail = hold === "wait" ? "waiting 15 minutes for the team" : out.includes(SKIP) ? "Claude chose not to reply" : await deliver(x.chat, out, a.quote ? x.msg?.id : undefined);
           break;
         }
         case "agent": {
@@ -584,6 +639,9 @@ function logBase(flow: Flow, x: Ctx, d: EngineDeps): LogEntry {
 }
 
 async function guards(flow: Flow, x: Ctx, d: EngineDeps, cooldown = true): Promise<string | null> {
+  // Zaid on the official number answers once per burst on its own (ai_reply checks newer and answered
+  // messages), so a per-chat cooldown would only drop a merchant's follow-up question for good.
+  if (d.channel.kind === "official" && hasAiReply(flow)) cooldown = false;
   if (cooldown && flow.cooldownSeconds && x.chat && (await d.state.get(`flow:cd:${flow.id}:${x.chat}`))) return `cooldown (${flow.cooldownSeconds}s per chat)`;
   if (flow.mode !== "dry" && !(await bump(d.state, `flow:cap:${flow.id}:${Math.floor(x.now / HOUR)}`, 7200, flow.maxPerHour))) return `hourly limit reached (${flow.maxPerHour})`;
   return null;
@@ -767,6 +825,69 @@ export async function runWebhookFlow(flow: Flow, input: WebhookInput, d: EngineD
   const entry: LogEntry = { ...fired.entry, text: input.text?.slice(0, 100), trigger: { text: input.text?.slice(0, 1000), type: "webhook" } };
   await pushLog(d.state, [entry]);
   return entry;
+}
+
+// ---------- unanswered chats ----------
+
+const hasAiReply = (f: Flow) => f.actions.some((a) => a.type === "ai_reply") || !!f.graph?.nodes.some((n) => n.kind === "action" && n.action.type === "ai_reply");
+
+/**
+ * Chats whose last message is the other person's and that the AI-reply flow never handled (it failed, or the
+ * message came in while flows were off or before the flow existed) get one pass through the AI-reply flows, while the 24-hour window still has
+ * at least half an hour left. The person waits `minAgeMinutes` first so a live reply or the team can answer.
+ */
+export async function catchUpUnanswered(d: EngineDeps, now = Date.now(), opts: { minAgeMinutes?: number; max?: number; scan?: number; convs?: Conversation[] } = {}): Promise<LogEntry[]> {
+  const { minAgeMinutes = 10, max = 5, scan = 100 } = opts;
+  const flows = d.flows.filter((f) => f.trigger.type === "message" && f.trigger.direction !== "out" && f.trigger.chats !== "group" && hasAiReply(f));
+  if (d.paused || !flows.length) return [];
+  const logs: LogEntry[] = [];
+  const nowS = Math.floor(now / 1000);
+  let done = 0;
+  // the caller may pass the chats it already read, so one wake-up reads them once
+  for (const c of opts.convs ? opts.convs.slice(0, scan) : await d.store.conversations(scan, undefined, nowS)) {
+    if (done >= max || (d.deadline && Date.now() > d.deadline)) break;
+    // the Business app's away message is not an answer: look past it
+    const m = c.last && isAppAuto(c.last) ? (await d.store.messages(c.waId, 6)).filter((k) => !isAppAuto(k)).pop() : c.last;
+    // the team said it is checking something and went quiet: one holding line so the merchant is not left hanging
+    if (d.channel.kind === "official" && m?.direction === "out" && !c.waId.endsWith("@g.us")) {
+      const p = teamPromise(await d.store.messages(c.waId, 12));
+      const age = p ? nowS - p.timestamp : 0;
+      if (p && age >= TEAM_WAIT_SECS && age < 3 * 3600 && c.windowClosesAt && c.windowClosesAt - nowS > 600 && (await d.state.set(`flow:hold:${p.id}`, "1", { ex: 7 * 86400, nx: true }))) {
+        done++;
+        const x = makeCtx(flows[0], d, now, p, await d.store.getName(c.waId), []);
+        try {
+          const id = await d.channel.sendText(c.waId, HOLD_LINE);
+          logs.push({ ...logBase(flows[0], x, d), note: `holding line after the team said it is checking${id ? ` (${id})` : ""}` });
+        } catch (e) {
+          logs.push({ ...logBase(flows[0], x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      continue;
+    }
+    if (!m || m.direction !== "in" || m.type === "reaction" || c.waId.endsWith("@g.us")) continue;
+    const waiting = !!(await d.state.get(`flow:wait:${m.id}`));
+    if (nowS - m.timestamp < (waiting ? TEAM_WAIT_SECS : minAgeMinutes * 60) || !c.windowClosesAt || c.windowClosesAt - nowS < 1800) continue;
+    const chatName = await d.store.getName(c.waId);
+    const tags = await getTags(d.state, c.waId);
+    for (const flow of flows) {
+      const x = makeCtx(flow, d, now, m, chatName, tags);
+      try {
+        if (!(await matches(flow, x, d)).ok) continue;
+        // a message the flow already looked at and chose to skip (personal, bot) stays skipped,
+        // unless it was only waiting for the team, which had its 15 minutes
+        if (!waiting && (await d.state.get(`flow:seen:${flow.id}:${m.id}`))) continue;
+        if (!(await d.state.set(`flow:catch:${flow.id}:${m.id}`, "1", { ex: 7 * 86400, nx: true }))) continue;
+        done++;
+        const fired = await fire(flow, x, d);
+        if (fired) logs.push({ ...fired.entry, note: fired.entry.note ?? "reply to an unanswered message" });
+        if (fired?.stop) break;
+      } catch (e) {
+        logs.push({ ...logBase(flow, x, d), status: "error", note: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }
+  await pushLog(d.state, logs);
+  return logs;
 }
 
 // ---------- dry run for the dashboard ----------
