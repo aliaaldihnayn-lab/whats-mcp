@@ -92,9 +92,9 @@ test("header aliases and spacing are understood", async () => {
 test("optional header_var and button_var columns are read per row", async () => {
   const data = await xlsx([
     [
-      ["phone", "consent_date", "var1", "header_var", "متغير_الزر"],
-      ["0501234567", "2026-09-01", "أحمد", "عرض أحمد", "ar/app/1"],
-      ["0502345678", "2026-09-01", "سارة", "", ""],
+      ["phone", "consent_date", "var1", "header_var", "متغير_الزر", "coupon_code"],
+      ["0501234567", "2026-09-01", "أحمد", "عرض أحمد", "ar/app/1", "VIP10"],
+      ["0502345678", "2026-09-01", "سارة", "", "", ""],
     ],
   ]);
   const parsed = await parseRecipientsFile(data, "list.xlsx");
@@ -105,6 +105,9 @@ test("optional header_var and button_var columns are read per row", async () => 
   assert.equal(parsed.rows[0].buttonParam, "ar/app/1");
   assert.equal(parsed.rows[1].headerParam, undefined);
   assert.equal(parsed.rows[1].buttonParam, undefined);
+  assert.equal(parsed.hasCouponCode, true);
+  assert.equal(parsed.rows[0].couponParam, "VIP10");
+  assert.equal(parsed.rows[1].couponParam, undefined);
 
   const plain = await parseRecipientsFile(await xlsx([[["phone", "consent_date"], ["0501234567", "2026-09-01"]]]), "p.xlsx");
   assert.equal(plain.hasHeaderVar, false);

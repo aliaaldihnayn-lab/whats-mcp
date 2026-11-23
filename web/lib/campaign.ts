@@ -33,6 +33,8 @@ export type CampaignRecipient = {
   headerParam?: string;
   /** This customer's value for the end of a URL button's link; overrides the campaign-wide one. */
   buttonParam?: string;
+  /** This customer's code for a "copy offer code" button; overrides the campaign-wide one. */
+  couponParam?: string;
   sourceRow?: number;
   consentSource: string;
   /** ISO string */
@@ -49,6 +51,8 @@ export type SendOptions = {
   headerText?: string;
   /** Value for the end of every URL button link that has {{1}}, when the row has none. */
   buttonParam?: string;
+  /** The code a "copy offer code" button copies, when the row has none. Defaults to the template's own sample code. */
+  couponCode?: string;
 };
 
 type Campaign = {
@@ -196,6 +200,8 @@ export type TemplateShape = {
   header: "none" | "text" | "text_var" | MediaKind;
   /** Indexes (in the template's button list) of URL buttons whose link ends with {{1}}. */
   urlVars: number[];
+  /** A "copy offer code" (COPY_CODE) button: its index and the sample code the template was approved with. */
+  copyCode?: { index: number; example?: string };
 };
 
 const MEDIA_FORMATS: Record<string, MediaKind> = { IMAGE: "image", VIDEO: "video", DOCUMENT: "document" };
@@ -213,9 +219,14 @@ export function templateShape(components: any[]): TemplateShape | { error: strin
     if (c.type === "BUTTONS") {
       (c.buttons ?? []).forEach((b: any, i: number) => {
         if (b.type === "URL" && /\{\{/.test(b.url ?? "")) shape.urlVars.push(i);
+        if (b.type === "COPY_CODE") {
+          const ex = Array.isArray(b.example) ? b.example[0] : b.example;
+          shape.copyCode = { index: i, ...(typeof ex === "string" && ex.trim() ? { example: ex.trim() } : {}) };
+        }
       });
       // VOICE_CALL (call on WhatsApp) is static like PHONE_NUMBER: it takes no parameter at send time.
-      const bad = (c.buttons ?? []).find((b: any) => !["QUICK_REPLY", "PHONE_NUMBER", "URL", "VOICE_CALL"].includes(b.type));
+      // COPY_CODE needs the code at send time: the row's coupon_code, the form's code, or the template's sample.
+      const bad = (c.buttons ?? []).find((b: any) => !["QUICK_REPLY", "PHONE_NUMBER", "URL", "VOICE_CALL", "COPY_CODE"].includes(b.type));
       if (bad) return { error: `Template has a ${bad.type} button, which campaigns do not support yet.` };
     }
   }
@@ -228,11 +239,14 @@ export function unsupportedReason(components: any[]): string | null {
   return "error" in s ? s.error : null;
 }
 
+const COUPON_MAX = 20; // the length WhatsApp Manager allows for an offer code
+const COUPON = new RegExp(`^[A-Za-z0-9_-]{1,${COUPON_MAX}}$`);
+const couponFallback = (shape: TemplateShape, send?: SendOptions) => send?.couponCode?.trim() || shape.copyCode?.example || "";
 const HEADER_TEXT_MAX = 60; // Meta's limit for the whole text header
 const BAD_VALUE = /[\n\r\t]| {4,}/;
 
 /** Problems with the campaign-wide send options or the per-row values the template needs. Each is a failing check. */
-export function sendInputChecks(shape: TemplateShape, send: SendOptions | undefined, rows: readonly { headerParam?: string; buttonParam?: string; sourceRow?: number }[]): PreflightCheck[] {
+export function sendInputChecks(shape: TemplateShape, send: SendOptions | undefined, rows: readonly { headerParam?: string; buttonParam?: string; couponParam?: string; sourceRow?: number }[]): PreflightCheck[] {
   const out: PreflightCheck[] = [];
   const kind = shape.header;
   const media = send?.media;
@@ -261,10 +275,20 @@ export function sendInputChecks(shape: TemplateShape, send: SendOptions | undefi
     const values = [fallback, ...rows.map((r) => r.buttonParam ?? "")].filter(Boolean);
     if (values.some((v) => /\s/.test(v.trim()) || v.length > 2000)) out.push({ id: "send.button_var", ok: false, message: "A link value contains spaces or is too long; it is added to the end of the link as is." });
   }
+
+  if (shape.copyCode) {
+    const fallback = couponFallback(shape, send);
+    const missing = rows.filter((r) => !(r.couponParam?.trim() || fallback));
+    if (missing.length) out.push({ id: "send.coupon_code", ok: false, message: `The template has a copy-code button: fill the code in the campaign form or a coupon_code column. Missing in rows ${rowsList(missing)}.` });
+    const values = [fallback, ...rows.map((r) => r.couponParam?.trim() ?? "")].filter(Boolean);
+    if (values.some((v) => !COUPON.test(v))) out.push({ id: "send.coupon_code", ok: false, message: `A code is longer than ${COUPON_MAX} characters or contains spaces or symbols; use letters, numbers, - or _ only.` });
+  } else if (send?.couponCode?.trim()) {
+    out.push({ id: "send.coupon_code", ok: false, message: "The template has no copy-code button, so the code would not be sent. Remove it or choose a template with a copy-code button." });
+  }
   return out;
 }
 
-function templateMessage(t: Campaign["template"], r: Pick<CampaignRecipient, "params" | "headerParam" | "buttonParam">, shape?: TemplateShape, send?: SendOptions) {
+function templateMessage(t: Campaign["template"], r: Pick<CampaignRecipient, "params" | "headerParam" | "buttonParam" | "couponParam">, shape?: TemplateShape, send?: SendOptions) {
   const components: any[] = [];
   if (shape && (shape.header === "image" || shape.header === "video" || shape.header === "document") && send?.media) {
     const m = send.media;
@@ -278,6 +302,10 @@ function templateMessage(t: Campaign["template"], r: Pick<CampaignRecipient, "pa
   for (const index of shape?.urlVars ?? []) {
     components.push({ type: "button", sub_type: "url", index: String(index), parameters: [{ type: "text", text: (r.buttonParam?.trim() || send?.buttonParam?.trim()) ?? "" }] });
   }
+  if (shape?.copyCode) {
+    const code = r.couponParam?.trim() || couponFallback(shape, send);
+    components.push({ type: "button", sub_type: "copy_code", index: String(shape.copyCode.index), parameters: [{ type: "coupon_code", coupon_code: code }] });
+  }
   return {
     type: "template",
     template: {
@@ -290,7 +318,7 @@ function templateMessage(t: Campaign["template"], r: Pick<CampaignRecipient, "pa
 
 // -- screening ---------------------------------------------------------------
 
-export type DryRunRow = RecipientRow & { sourceRow?: number; headerParam?: string; buttonParam?: string };
+export type DryRunRow = RecipientRow & { sourceRow?: number; headerParam?: string; buttonParam?: string; couponParam?: string };
 
 /** Trims the options and drops empty ones, so a blank form field means "not given". */
 function cleanSend(send?: SendOptions): SendOptions | undefined {
@@ -302,6 +330,7 @@ function cleanSend(send?: SendOptions): SendOptions | undefined {
   }
   if (send.headerText?.trim()) out.headerText = send.headerText.trim();
   if (send.buttonParam?.trim()) out.buttonParam = send.buttonParam.trim();
+  if (send.couponCode?.trim()) out.couponCode = send.couponCode.trim();
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -380,6 +409,7 @@ export async function createDryRun(deps: CampaignDeps, input: { template: { name
     params: a.params ?? [],
     ...(a.headerParam?.trim() ? { headerParam: a.headerParam.trim() } : {}),
     ...(a.buttonParam?.trim() ? { buttonParam: a.buttonParam.trim() } : {}),
+    ...(a.couponParam?.trim() ? { couponParam: a.couponParam.trim() } : {}),
     sourceRow: a.sourceRow,
     consentSource: a.consentSource!,
     consentAt: iso(a.consentAt!),

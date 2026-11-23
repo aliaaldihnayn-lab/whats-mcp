@@ -168,10 +168,11 @@ export function registerMarketingTools(server: McpServer, { graph, store, cfg }:
           .describe("the file for a template with an image, video or document header"),
         header_text: z.string().optional().describe("value for {{1}} in a text header; a header_var column in the list overrides it per row"),
         button_param: z.string().optional().describe("value added at the end of a link button's URL ({{1}}); a button_var column in the list overrides it per row"),
+        coupon_code: z.string().optional().describe("code for a 'copy offer code' button; defaults to the template's own sample code, and a coupon_code column in the list overrides it per row"),
       }),
       annotations: WRITE,
     },
-    async ({ template_name, language, upload_id, rows, header_media, header_text, button_param }) => {
+    async ({ template_name, language, upload_id, rows, header_media, header_text, button_param, coupon_code }) => {
       const problem = guard();
       if (problem) return fail(problem);
       if (!!upload_id === !!rows) return fail("Give exactly one of upload_id or rows.");
@@ -184,7 +185,7 @@ export function registerMarketingTools(server: McpServer, { graph, store, cfg }:
         } else {
           list = rows!.map((r, i) => ({ phone: r.phone, consentSource: "dashboard", consentAt: r.consent_date, params: r.params, sourceRow: i + 1 }));
         }
-        const r = await createDryRun(deps, { template: { name: template_name, language }, rows: list, send: { media: header_media, headerText: header_text, buttonParam: button_param } });
+        const r = await createDryRun(deps, { template: { name: template_name, language }, rows: list, send: { media: header_media, headerText: header_text, buttonParam: button_param, couponCode: coupon_code } });
         const { blocked, ...rest } = r;
         return json({ ...rest, blocked: blocked.map((b) => ({ sourceRow: b.sourceRow, reason: b.reason, detail: b.detail })) });
       } catch (e) {

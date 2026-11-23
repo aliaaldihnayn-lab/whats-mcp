@@ -133,6 +133,36 @@ test("the send carries the media header, per-row header and link values, with fo
   assert.deepEqual(d.g.sends[0].payload.template.components[0], { type: "header", parameters: [{ type: "document", document: { id: "media-1", filename: "عرض.pdf" } }] });
 });
 
+test("a copy-code button sends the row's code, the form's code, or the template's sample", async () => {
+  const comps = [
+    { type: "BODY", text: "هلا {{1}}، عرضك جاهز" },
+    { type: "BUTTONS", buttons: [{ type: "COPY_CODE", text: "انسخ رمز العرض", example: ["CPZ40"] }, { type: "QUICK_REPLY", text: "إيقاف" }] },
+  ];
+  const t = setup({ components: comps });
+  const list = rows(6).map((r, i) => (i === 0 ? { ...r, couponParam: "VIP10" } : r));
+  const dry = await createDryRun(t.deps, { template: TEMPLATE, rows: list });
+  assert.equal(dry.ok, true, JSON.stringify(dry.checks.filter((c) => !c.ok)));
+  await startCampaign(t.deps, dry.campaignId!, dry.confirmToken!);
+  await advanceCampaign(t.deps, dry.campaignId!, fast);
+  const btn = (n: number) => t.g.sends[n].payload.template.components.find((c: any) => c.type === "button");
+  assert.deepEqual(btn(0), { type: "button", sub_type: "copy_code", index: "0", parameters: [{ type: "coupon_code", coupon_code: "VIP10" }] });
+  assert.equal(btn(1).parameters[0].coupon_code, "CPZ40");
+
+  const f = setup({ components: comps });
+  const fd = await createDryRun(f.deps, { template: TEMPLATE, rows: rows(5), send: { couponCode: " NOV25 " } });
+  await startCampaign(f.deps, fd.campaignId!, fd.confirmToken!);
+  await advanceCampaign(f.deps, fd.campaignId!, fast);
+  assert.equal(f.g.sends[0].payload.template.components.find((c: any) => c.type === "button").parameters[0].coupon_code, "NOV25");
+
+  const bad = await createDryRun(setup({ components: comps }).deps, { template: TEMPLATE, rows: rows(3), send: { couponCode: "خصم 40" } });
+  assert.ok(bad.checks.some((c) => c.id === "send.coupon_code" && !c.ok));
+  const noSample = [comps[0], { type: "BUTTONS", buttons: [{ type: "COPY_CODE", text: "انسخ" }] }];
+  const none = await createDryRun(setup({ components: noSample }).deps, { template: TEMPLATE, rows: rows(3) });
+  assert.ok(none.checks.some((c) => c.id === "send.coupon_code" && !c.ok));
+  const extra = await createDryRun(setup().deps, { template: TEMPLATE, rows: rows(3), send: { couponCode: "X1" } });
+  assert.ok(extra.checks.some((c) => c.id === "send.coupon_code" && !c.ok));
+});
+
 test("start needs the right token, once", async () => {
   const t = setup();
   const dry = await createDryRun(t.deps, { template: TEMPLATE, rows: rows(10) });

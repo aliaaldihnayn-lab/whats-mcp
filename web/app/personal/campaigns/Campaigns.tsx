@@ -46,14 +46,14 @@ type View = {
 };
 type Report = View & { delivered: number; read: number; pending: number; failureRate: number; errors: { code: number | null; count: number; meaning?: string }[] };
 type MediaKind = "image" | "video" | "document";
-type Shape = { header: "none" | "text" | "text_var" | MediaKind; urlVars: number[] };
+type Shape = { header: "none" | "text" | "text_var" | MediaKind; urlVars: number[]; copyCode?: { index: number; example?: string } };
 type Tpl = { name: string; language: string; status: string; category: string; shape?: Shape; unsupported?: string };
 type Overview = {
   number: { ok: boolean; error?: string; quality_rating?: string; messaging_limit_tier?: string; status?: string; name_status?: string; verified_name?: string; display_phone_number?: string };
   templates: { ok: boolean; error?: string; data?: Tpl[] };
   campaigns: View[];
 };
-type Upload = { uploadId: string; filename: string; rows: number; paramCount: number; hasHeaderVar?: boolean; hasButtonVar?: boolean; warnings: string[]; sample: { sourceRow: number; phone: string; consentAt: string; params: string[] }[] };
+type Upload = { uploadId: string; filename: string; rows: number; paramCount: number; hasHeaderVar?: boolean; hasButtonVar?: boolean; hasCouponCode?: boolean; warnings: string[]; sample: { sourceRow: number; phone: string; consentAt: string; params: string[] }[] };
 type Issue = { level: "error" | "warning"; field: string; message: string };
 type TplResult = { ok: false; issues: Issue[] } | { ok: true; submitted: boolean; warnings: Issue[]; meta?: { status: string }; paramCount: number };
 
@@ -110,6 +110,7 @@ function App({ secret }: { secret: string }) {
   const [mediaId, setMediaId] = useState<{ file: File; id: string } | null>(null);
   const [headerText, setHeaderText] = useState("");
   const [buttonParam, setButtonParam] = useState("");
+  const [couponCode, setCouponCode] = useState("");
 
   // Fills the form from a ready-made template; its sample header image comes from /public.
   async function fillSuggested(t: SuggestedTemplate) {
@@ -218,6 +219,7 @@ function App({ secret }: { secret: string }) {
       ...(media ? { media } : {}),
       ...(shape?.header === "text_var" && headerText.trim() ? { headerText } : {}),
       ...(shape?.urlVars.length && buttonParam.trim() ? { buttonParam } : {}),
+      ...(shape?.copyCode && couponCode.trim() ? { couponCode } : {}),
     });
     if (r.mediaId && mediaFile) setMediaId({ file: mediaFile, id: r.mediaId });
     setDry(r);
@@ -342,7 +344,7 @@ function App({ secret }: { secret: string }) {
               <>
                 <label htmlFor="list">1. ملف العملاء (xlsx أو csv، حتى 2,000 صف)</label>
                 <input id="list" type="file" accept=".xlsx,.csv" disabled={!!busy} onChange={(e) => { void sendFile(e.target.files); e.target.value = ""; }} />
-                <p className="hint">الأعمدة: <code>phone</code> و <code>consent_date</code> (تاريخ التسجيل) ثم <code>var1</code> و <code>var2</code>… لمتغيرات القالب. اختياري: <code>header_var</code> لمتغير العنوان و <code>button_var</code> لآخر رابط الزر، لو تبيها تختلف من عميل لعميل. كل رقم لازم يكون وافق على استقبال رسائلك.</p>
+                <p className="hint">الأعمدة: <code>phone</code> و <code>consent_date</code> (تاريخ التسجيل) ثم <code>var1</code> و <code>var2</code>… لمتغيرات القالب. اختياري: <code>header_var</code> لمتغير العنوان و <code>button_var</code> لآخر رابط الزر و <code>coupon_code</code> لكود زر النسخ، لو تبيها تختلف من عميل لعميل. كل رقم لازم يكون وافق على استقبال رسائلك.</p>
                 {busy === "upload" && <div className="skel" style={{ height: 40 }} />}
                 {upload && (
                   <div className="note" style={{ margin: "10px 0" }}>
@@ -350,6 +352,7 @@ function App({ secret }: { secret: string }) {
                       <strong>{upload.filename}</strong>: {upload.rows} صف، {upload.paramCount} متغير.
                       {upload.hasHeaderVar && " فيه عمود header_var."}
                       {upload.hasButtonVar && " فيه عمود button_var."}
+                      {upload.hasCouponCode && " فيه عمود coupon_code."}
                       {upload.warnings.map((w) => <span key={w} className="hint"> {w}</span>)}
                     </p>
                     <p className="hint" dir="ltr">{upload.sample.map((s) => `#${s.sourceRow} ${s.phone} ${s.consentAt.slice(0, 10)}`).join("  |  ")}</p>
@@ -393,6 +396,17 @@ function App({ secret }: { secret: string }) {
                         <label htmlFor="button-param">آخر رابط الزر</label>
                         <input id="button-param" dir="ltr" value={buttonParam} onChange={(e) => { setButtonParam(e.target.value); setDry(null); }} />
                         <p className="hint">ينضاف لآخر رابط الزر كما هو، بدون مسافات. {upload.hasButtonVar ? "عمود button_var في الملف يغلب هذي القيمة للصفوف اللي فيها قيمة." : "لو تبيه يختلف من عميل لعميل، أضف عمود button_var في الملف."}</p>
+                      </>
+                    )}
+
+                    {shape?.copyCode && (
+                      <>
+                        <label htmlFor="coupon-code">كود العرض (زر نسخ الكود)</label>
+                        <input id="coupon-code" dir="ltr" maxLength={20} placeholder={shape.copyCode.example ?? ""} value={couponCode} onChange={(e) => { setCouponCode(e.target.value); setDry(null); }} />
+                        <p className="hint">
+                          {shape.copyCode.example ? `لو تركته فاضي ينرسل كود القالب ${shape.copyCode.example}. ` : "لازم تكتب الكود هنا أو تضيف عمود coupon_code. "}
+                          {upload.hasCouponCode ? "عمود coupon_code في الملف يغلب هذي القيمة للصفوف اللي فيها كود." : "لو تبي كود مختلف لكل عميل، أضف عمود coupon_code في الملف."}
+                        </p>
                       </>
                     )}
 
@@ -447,6 +461,7 @@ function App({ secret }: { secret: string }) {
                         setMediaFile(null);
                         setHeaderText("");
                         setButtonParam("");
+                        setCouponCode("");
                         await refresh();
                         setDriving(true);
                       })

@@ -92,7 +92,7 @@ export async function POST(req: Request) {
         if (!up) return fail("The uploaded list is gone (they are kept 24 hours); upload it again.", 404);
         // The header file: a public link, a media id from an earlier dry run, or a file the page just uploaded in pieces.
         // An uploaded file goes to Meta once; its media id comes back so a second dry run does not upload it again.
-        const send: SendOptions = { headerText: str(body.headerText), buttonParam: str(body.buttonParam) };
+        const send: SendOptions = { headerText: str(body.headerText), buttonParam: str(body.buttonParam), couponCode: str(body.couponCode) };
         let mediaId: string | undefined;
         if (body.media) {
           const kind = body.media.kind;
