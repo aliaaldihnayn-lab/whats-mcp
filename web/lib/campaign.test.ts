@@ -331,8 +331,8 @@ test("static buttons, including a WhatsApp voice call, need no send-time paramet
   const btns = (buttons: object[]) => [{ type: "BODY", text: "هلا {{1}}" }, { type: "BUTTONS", buttons }];
   assert.equal(unsupportedReason(btns([{ type: "VOICE_CALL", text: "اتصل" }, { type: "QUICK_REPLY", text: "إيقاف" }])), null);
   assert.equal(unsupportedReason(btns([{ type: "PHONE_NUMBER", text: "اتصل" }])), null);
-  assert.match(unsupportedReason(btns([{ type: "COPY_CODE", text: "x" }]))!, /COPY_CODE/);
-  assert.match(unsupportedReason(btns([{ type: "URL", text: "x", url: "https://a.b/{{1}}" }]))!, /variable/);
+  assert.equal(unsupportedReason(btns([{ type: "URL", text: "x", url: "https://a.b/{{1}}" }])), null); // filled from the form or button_var
+  assert.match(unsupportedReason(btns([{ type: "FLOW", text: "x" }]))!, /FLOW/);
 });
 
 test("the inbox keeps the rendered message, not just the template name", async () => {
