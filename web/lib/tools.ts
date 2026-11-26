@@ -4,8 +4,10 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Graph, GraphError, normalizePhone } from "./graph";
 import type { Store, StoredMessage } from "./store";
+import { renderTemplateText } from "./template-text";
 
-type Deps = { graph: Graph; store: Store };
+/** canSend: false registers the read tools only, for read-only keys. */
+type Deps = { graph: Graph; store: Store; canSend?: boolean };
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 const json = (v: unknown) => text(JSON.stringify(v, null, 2));
@@ -40,7 +42,7 @@ function line(m: StoredMessage, names: Record<string, string | undefined> = {}):
   return `[${when} UTC] ${who}: ${body}${media}${status}${reply}  {id: ${m.id}}`;
 }
 
-export function registerTools(server: McpServer, { graph, store }: Deps) {
+export function registerTools(server: McpServer, { graph, store, canSend = true }: Deps) {
   // Wraps a send so the outgoing message lands in the cache like webhook-received ones.
   async function recordOutgoing(to: string, res: { messageId: string; waId?: string }, partial: Partial<StoredMessage>) {
     const waId = res.waId ?? normalizePhone(to);
@@ -182,8 +184,8 @@ export function registerTools(server: McpServer, { graph, store }: Deps) {
     },
     async () => {
       try {
-        const [phone, profile, convs] = await Promise.all([graph.phoneInfo(), graph.businessProfile(), store.conversations(100)]);
-        return json({ phone, profile: (profile as any)?.data?.[0] ?? profile, cachedConversations: convs.length });
+        const [phone, profile, convs] = await Promise.all([graph.phoneInfo(), graph.businessProfile(), store.countConversations(100)]);
+        return json({ phone, profile: (profile as any)?.data?.[0] ?? profile, cachedConversations: convs });
       } catch (e) {
         return fail(describeError(e));
       }
@@ -191,6 +193,8 @@ export function registerTools(server: McpServer, { graph, store }: Deps) {
   );
 
   // ---- send --------------------------------------------------------------
+
+  if (!canSend) return;
 
   server.registerTool(
     "send_text",
@@ -276,7 +280,9 @@ export function registerTools(server: McpServer, { graph, store }: Deps) {
             ...(body_params.length ? [{ type: "body", parameters: body_params.map((t) => ({ type: "text", text: t })) }] : []),
           ];
         const res = await graph.sendMessage(to, { type: "template", template: { name, language: { code: language }, ...(comps.length ? { components: comps } : {}) } });
-        await recordOutgoing(to, res, { type: "template", text: `[template ${name}] ${body_params.join(" | ")}`.trim() });
+        const raw = components ? null : await graph.getTemplate(name, language).catch(() => null);
+        const text = renderTemplateText(raw?.components, body_params, header_params) ?? `[template ${name}] ${body_params.join(" | ")}`.trim();
+        await recordOutgoing(to, res, { type: "template", text });
         return json({ sent: true, message_id: res.messageId });
       } catch (e) {
         return fail(describeError(e));

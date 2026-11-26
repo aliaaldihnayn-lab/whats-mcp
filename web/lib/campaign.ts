@@ -1,0 +1,843 @@
+// Marketing campaign runner for the official Cloud API.
+//
+// Flow: createDryRun screens the list and saves the campaign with a one-time
+// token; startCampaign re-screens everything with fresh data and starts it;
+// advanceCampaign sends in time-boxed slices (Vercel functions are short-lived),
+// pausing for a pilot batch first; the circuit breaker can halt it at any point
+// and only a person resumes it. State lives in Redis under "mk:camp:*".
+//
+// Nothing here sends on its own: advanceCampaign must be called, and only for a
+// campaign that has been started with its dry-run token.
+
+import { randomUUID } from "node:crypto";
+import ExcelJS from "exceljs";
+import { DEFAULT_BREAKER, HALT_CODES, evaluate, parseErrorCode, qualityAllowsSending, type BreakerConfig, type Outcome } from "./breaker";
+import { GraphError, type Graph } from "./graph";
+import { dailyLimit, normalizeSaudiMobile, preflight, type BlockedRow, type PreflightCheck, type PreflightReport, type RecipientRow } from "./preflight";
+import type { Store } from "./store";
+import { renderTemplateText } from "./template-text";
+
+export type CampaignDeps = {
+  graph: Pick<Graph, "sendMessage" | "phoneInfo" | "getTemplate" | "getTemplateInfo">;
+  store: Store;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  breaker?: BreakerConfig;
+};
+
+export type CampaignStatus = "dry_run" | "running" | "waiting" | "halted" | "completed" | "cancelled";
+
+export type CampaignRecipient = {
+  phone: string;
+  params: string[];
+  /** This customer's value for a {{1}} in the template header; overrides the campaign-wide one. */
+  headerParam?: string;
+  /** This customer's value for the end of a URL button's link; overrides the campaign-wide one. */
+  buttonParam?: string;
+  /** This customer's code for a "copy offer code" button; overrides the campaign-wide one. */
+  couponParam?: string;
+  sourceRow?: number;
+  consentSource: string;
+  /** ISO string */
+  consentAt: string;
+};
+
+/** A media header's file: a public https link, or a media id from uploading the file to Meta. */
+export type CampaignMedia = { kind: MediaKind; link?: string; id?: string; filename?: string };
+
+/** What a send needs beyond the body variables, chosen once for the whole campaign. */
+export type SendOptions = {
+  media?: CampaignMedia;
+  /** Value for the header's {{1}} when the list has no header_var column (or a row leaves it empty). */
+  headerText?: string;
+  /** Value for the end of every URL button link that has {{1}}, when the row has none. */
+  buttonParam?: string;
+  /** The code a "copy offer code" button copies, when the row has none. Defaults to the template's own sample code. */
+  couponCode?: string;
+};
+
+type Campaign = {
+  id: string;
+  createdAt: number;
+  status: CampaignStatus;
+  template: { name: string; language: string; paramCount: number };
+  /** The template's header and buttons as the send has to fill them. Absent on campaigns from before media support. */
+  shape?: TemplateShape;
+  send?: SendOptions;
+  /** Numbers that an earlier campaign did not deliver to; the 7-day cooldown does not block them. */
+  retry?: string[];
+  /** One-time token from the dry run; removed when the campaign starts. */
+  confirmToken?: string;
+  total: number;
+  cursor: number;
+  pilotSize: number;
+  pilotDone: boolean;
+  resumeAt?: number;
+  /** Outcomes before this index are ignored by the breaker (set when a person resumes). */
+  evalFrom: number;
+  skipped: number;
+  skippedBy: Record<string, number>;
+  startedAt?: number;
+  finishedAt?: number;
+  haltReason?: string;
+  haltCode?: number;
+};
+
+export type CampaignView = {
+  id: string;
+  status: CampaignStatus;
+  template: Campaign["template"];
+  total: number;
+  cursor: number;
+  remaining: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  skippedBy: Record<string, number>;
+  pilotSize: number;
+  resumeAt?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  haltReason?: string;
+  haltCode?: number;
+  /** Another slice is already running for this campaign; nothing was sent by this call. */
+  busy?: boolean;
+};
+
+const PILOT_SHARE = 0.05;
+const PILOT_MIN = 5;
+const PILOT_WAIT_MS = 60_000;
+/** How long a campaign waits before retrying after hitting the 24-hour recipient cap. */
+const CAPACITY_RETRY_MS = 30 * 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const BLOCKED_SAMPLE = 200;
+const STATUS_WINDOW = 400; // recent sends whose delivery status is re-read before each batch
+const LIVE: CampaignStatus[] = ["running", "waiting", "halted"];
+
+const key = (id: string, part = "") => `camp:${id}${part}`;
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const iso = (d: Date | string) => (d instanceof Date ? d.toISOString() : d);
+
+async function settle<T>(f: () => Promise<T>): Promise<T | null> {
+  try {
+    return await f();
+  } catch {
+    return null;
+  }
+}
+
+// -- persistence -------------------------------------------------------------
+
+async function load(store: Store, id: string): Promise<Campaign | null> {
+  return store.mkGet<Campaign>(key(id));
+}
+
+function counts(outcomes: readonly Outcome[]) {
+  const sent = outcomes.filter((o) => o.ok).length;
+  return { sent, failed: outcomes.length - sent };
+}
+
+function view(c: Campaign, outcomes: readonly Outcome[], extra: Partial<CampaignView> = {}): CampaignView {
+  return {
+    id: c.id,
+    status: c.status,
+    template: c.template,
+    total: c.total,
+    cursor: c.cursor,
+    remaining: c.total - c.cursor,
+    ...counts(outcomes),
+    skipped: c.skipped,
+    skippedBy: c.skippedBy,
+    pilotSize: c.pilotSize,
+    resumeAt: c.resumeAt,
+    startedAt: c.startedAt,
+    finishedAt: c.finishedAt,
+    haltReason: c.haltReason,
+    haltCode: c.haltCode,
+    ...extra,
+  };
+}
+
+async function save(store: Store, c: Campaign, outcomes?: Outcome[]) {
+  await store.mkSet(key(c.id), c);
+  if (outcomes) await store.mkSet(key(c.id, ":o"), outcomes);
+}
+
+async function release(store: Store, id: string) {
+  const active = await store.mkGet<string>("camp:active");
+  if (active === id) {
+    await store.mkSet("camp:active", "");
+    await store.mkUnlock("active");
+  }
+}
+
+/** The campaign currently holding the account (running, waiting or halted), if any. */
+async function activeCampaign(store: Store): Promise<Campaign | null> {
+  const id = await store.mkGet<string>("camp:active");
+  const c = id ? await load(store, id) : null;
+  return c && LIVE.includes(c.status) ? c : null;
+}
+
+/** Re-reads delivery statuses so a "failed" webhook update turns a send into a failure. Returns how many changed. */
+async function refreshStatuses(store: Store, outcomes: Outcome[], recent = outcomes.length): Promise<number> {
+  const targets = outcomes.slice(-recent).filter((o) => o.ok && o.messageId);
+  if (!targets.length) return 0;
+  const msgs = await store.messagesByIds(targets.map((o) => o.messageId!));
+  let changed = 0;
+  targets.forEach((o, i) => {
+    const m = msgs[i];
+    if (m?.status === "failed") {
+      o.ok = false;
+      o.errorCode = parseErrorCode(m.error);
+      o.error = m.error;
+      changed++;
+    }
+  });
+  return changed;
+}
+
+// -- template ----------------------------------------------------------------
+
+export type MediaKind = "image" | "video" | "document";
+
+/** The parts of a template that need a value at send time, beyond the body variables. */
+export type TemplateShape = {
+  header: "none" | "text" | "text_var" | MediaKind;
+  /** Indexes (in the template's button list) of URL buttons whose link ends with {{1}}. */
+  urlVars: number[];
+  /** A "copy offer code" (COPY_CODE) button: its index and the sample code the template was approved with. */
+  copyCode?: { index: number; example?: string };
+};
+
+const MEDIA_FORMATS: Record<string, MediaKind> = { IMAGE: "image", VIDEO: "video", DOCUMENT: "document" };
+
+/** Reads a template's components. Returns a reason instead when a part needs something campaigns cannot send. */
+export function templateShape(components: any[]): TemplateShape | { error: string } {
+  const shape: TemplateShape = { header: "none", urlVars: [] };
+  for (const c of components) {
+    if (!["HEADER", "BODY", "FOOTER", "BUTTONS"].includes(c.type)) return { error: `Template has a ${c.type} component, which campaigns do not support yet.` };
+    if (c.type === "HEADER") {
+      if (c.format === "TEXT" || !c.format) shape.header = /\{\{/.test(c.text ?? "") ? "text_var" : "text";
+      else if (MEDIA_FORMATS[c.format]) shape.header = MEDIA_FORMATS[c.format];
+      else return { error: `Template has a ${c.format} header, which campaigns do not support yet.` };
+    }
+    if (c.type === "BUTTONS") {
+      (c.buttons ?? []).forEach((b: any, i: number) => {
+        if (b.type === "URL" && /\{\{/.test(b.url ?? "")) shape.urlVars.push(i);
+        if (b.type === "COPY_CODE") {
+          const ex = Array.isArray(b.example) ? b.example[0] : b.example;
+          shape.copyCode = { index: i, ...(typeof ex === "string" && ex.trim() ? { example: ex.trim() } : {}) };
+        }
+      });
+      // VOICE_CALL (call on WhatsApp) is static like PHONE_NUMBER: it takes no parameter at send time.
+      // COPY_CODE needs the code at send time: the row's coupon_code, the form's code, or the template's sample.
+      const bad = (c.buttons ?? []).find((b: any) => !["QUICK_REPLY", "PHONE_NUMBER", "URL", "VOICE_CALL", "COPY_CODE"].includes(b.type));
+      if (bad) return { error: `Template has a ${bad.type} button, which campaigns do not support yet.` };
+    }
+  }
+  return shape;
+}
+
+/** Kept for callers that only need a yes or no on the template's components. */
+export function unsupportedReason(components: any[]): string | null {
+  const s = templateShape(components);
+  return "error" in s ? s.error : null;
+}
+
+const COUPON_MAX = 20; // the length WhatsApp Manager allows for an offer code
+const COUPON = new RegExp(`^[A-Za-z0-9_-]{1,${COUPON_MAX}}$`);
+const couponFallback = (shape: TemplateShape, send?: SendOptions) => send?.couponCode?.trim() || shape.copyCode?.example || "";
+const HEADER_TEXT_MAX = 60; // Meta's limit for the whole text header
+const BAD_VALUE = /[\n\r\t]| {4,}/;
+
+/** Problems with the campaign-wide send options or the per-row values the template needs. Each is a failing check. */
+export function sendInputChecks(shape: TemplateShape, send: SendOptions | undefined, rows: readonly { headerParam?: string; buttonParam?: string; couponParam?: string; sourceRow?: number }[]): PreflightCheck[] {
+  const out: PreflightCheck[] = [];
+  const kind = shape.header;
+  const media = send?.media;
+  const rowsList = (missing: typeof rows) => missing.slice(0, 10).map((r) => r.sourceRow ?? "?").join(", ") + (missing.length > 10 ? "…" : "");
+
+  if (kind === "image" || kind === "video" || kind === "document") {
+    if (!media || (!media.link && !media.id)) out.push({ id: "send.media", ok: false, message: `The template has a ${kind} header: add the ${kind} as a public https link or upload the file.` });
+    else if (media.kind !== kind) out.push({ id: "send.media", ok: false, message: `The template's header is a ${kind}, but the file given is a ${media.kind}.` });
+    else if (media.link && !/^https:\/\/\S+$/.test(media.link)) out.push({ id: "send.media", ok: false, message: "The media link must be a public https:// address." });
+  } else if (media && (media.link || media.id)) {
+    out.push({ id: "send.media", ok: false, message: "The template has no media header, so the file cannot be sent with it. Remove it or choose a template with an image, video or document header." });
+  }
+
+  if (kind === "text_var") {
+    const fallback = send?.headerText?.trim() ?? "";
+    const missing = rows.filter((r) => !(r.headerParam?.trim() || fallback));
+    if (missing.length) out.push({ id: "send.header_var", ok: false, message: `The template header has {{1}}: fill the header value in the campaign form or a header_var column. Missing in rows ${rowsList(missing)}.` });
+    const values = [fallback, ...rows.map((r) => r.headerParam ?? "")].filter(Boolean);
+    if (values.some((v) => v.length > HEADER_TEXT_MAX || BAD_VALUE.test(v))) out.push({ id: "send.header_var", ok: false, message: `A header value is longer than ${HEADER_TEXT_MAX} characters or contains a newline or tab.` });
+  }
+
+  if (shape.urlVars.length) {
+    const fallback = send?.buttonParam?.trim() ?? "";
+    const missing = rows.filter((r) => !(r.buttonParam?.trim() || fallback));
+    if (missing.length) out.push({ id: "send.button_var", ok: false, message: `The template's link button ends with {{1}}: fill the link value in the campaign form or a button_var column. Missing in rows ${rowsList(missing)}.` });
+    const values = [fallback, ...rows.map((r) => r.buttonParam ?? "")].filter(Boolean);
+    if (values.some((v) => /\s/.test(v.trim()) || v.length > 2000)) out.push({ id: "send.button_var", ok: false, message: "A link value contains spaces or is too long; it is added to the end of the link as is." });
+  }
+
+  if (shape.copyCode) {
+    const fallback = couponFallback(shape, send);
+    const missing = rows.filter((r) => !(r.couponParam?.trim() || fallback));
+    if (missing.length) out.push({ id: "send.coupon_code", ok: false, message: `The template has a copy-code button: fill the code in the campaign form or a coupon_code column. Missing in rows ${rowsList(missing)}.` });
+    const values = [fallback, ...rows.map((r) => r.couponParam?.trim() ?? "")].filter(Boolean);
+    if (values.some((v) => !COUPON.test(v))) out.push({ id: "send.coupon_code", ok: false, message: `A code is longer than ${COUPON_MAX} characters or contains spaces or symbols; use letters, numbers, - or _ only.` });
+  } else if (send?.couponCode?.trim()) {
+    out.push({ id: "send.coupon_code", ok: false, message: "The template has no copy-code button, so the code would not be sent. Remove it or choose a template with a copy-code button." });
+  }
+  return out;
+}
+
+function templateMessage(t: Campaign["template"], r: Pick<CampaignRecipient, "params" | "headerParam" | "buttonParam" | "couponParam">, shape?: TemplateShape, send?: SendOptions) {
+  const components: any[] = [];
+  if (shape && (shape.header === "image" || shape.header === "video" || shape.header === "document") && send?.media) {
+    const m = send.media;
+    const file: Record<string, string> = m.id ? { id: m.id } : { link: m.link! };
+    if (shape.header === "document" && m.filename) file.filename = m.filename;
+    components.push({ type: "header", parameters: [{ type: shape.header, [shape.header]: file }] });
+  } else if (shape?.header === "text_var") {
+    components.push({ type: "header", parameters: [{ type: "text", text: (r.headerParam?.trim() || send?.headerText?.trim()) ?? "" }] });
+  }
+  if (r.params.length) components.push({ type: "body", parameters: r.params.map((text) => ({ type: "text", text })) });
+  for (const index of shape?.urlVars ?? []) {
+    components.push({ type: "button", sub_type: "url", index: String(index), parameters: [{ type: "text", text: (r.buttonParam?.trim() || send?.buttonParam?.trim()) ?? "" }] });
+  }
+  if (shape?.copyCode) {
+    const code = r.couponParam?.trim() || couponFallback(shape, send);
+    components.push({ type: "button", sub_type: "copy_code", index: String(shape.copyCode.index), parameters: [{ type: "coupon_code", coupon_code: code }] });
+  }
+  return {
+    type: "template",
+    template: {
+      name: t.name,
+      language: { code: t.language },
+      ...(components.length ? { components } : {}),
+    },
+  };
+}
+
+// -- screening ---------------------------------------------------------------
+
+export type DryRunRow = RecipientRow & { sourceRow?: number; headerParam?: string; buttonParam?: string; couponParam?: string };
+
+/** Trims the options and drops empty ones, so a blank form field means "not given". */
+function cleanSend(send?: SendOptions): SendOptions | undefined {
+  if (!send) return undefined;
+  const out: SendOptions = {};
+  const m = send.media;
+  if (m && (m.link?.trim() || m.id?.trim())) {
+    out.media = { kind: m.kind, ...(m.id?.trim() ? { id: m.id.trim() } : { link: m.link!.trim() }), ...(m.filename?.trim() ? { filename: m.filename.trim() } : {}) };
+  }
+  if (send.headerText?.trim()) out.headerText = send.headerText.trim();
+  if (send.buttonParam?.trim()) out.buttonParam = send.buttonParam.trim();
+  if (send.couponCode?.trim()) out.couponCode = send.couponCode.trim();
+  return Object.keys(out).length ? out : undefined;
+}
+
+type Screen = {
+  report: PreflightReport<DryRunRow>;
+  checks: PreflightCheck[];
+  ok: boolean;
+  blocked: (BlockedRow & { sourceRow?: number })[];
+  template: Campaign["template"] | null;
+  shape: TemplateShape | null;
+};
+
+/** The full pre-send check against live data: Meta's view of the number and template, opt-outs, cooldown, capacity. */
+async function screen(deps: CampaignDeps, tpl: { name: string; language: string }, rows: readonly DryRunRow[], now: number, send?: SendOptions, retry?: ReadonlySet<string>): Promise<Screen> {
+  const { graph, store } = deps;
+  const phones = [...new Set(rows.map((r) => normalizeSaudiMobile(r.phone)).filter((p): p is string => !!p))];
+  const [phone, info, raw, optedOut, lastMarketingAt, recent24h, active] = await Promise.all([
+    settle(() => graph.phoneInfo()),
+    settle(() => graph.getTemplateInfo(tpl.name, tpl.language)),
+    settle(() => graph.getTemplate(tpl.name, tpl.language)),
+    store.optedOut(phones),
+    store.lastMarketing(phones),
+    store.recentMarketing(24 * 60 * 60 * 1000, now),
+    activeCampaign(store),
+  ]);
+
+  const report = preflight({ phone, template: info, language: tpl.language, rows, now, optedOut, lastMarketingAt, recent24h, retry });
+
+  const extra: PreflightCheck[] = [];
+  const parsed = raw ? templateShape((raw as any).components ?? []) : null;
+  const shape = parsed && !("error" in parsed) ? parsed : null;
+  if (parsed && "error" in parsed) extra.push({ id: "template.components", ok: false, message: parsed.error });
+  if (shape) extra.push(...sendInputChecks(shape, send, report.accepted as DryRunRow[]));
+  if (active) extra.push({ id: "campaign.active", ok: false, message: `Campaign ${active.id} is ${active.status}; finish, cancel or resume it first.` });
+
+  const checks = [...report.checks, ...extra];
+  return {
+    report,
+    checks,
+    ok: report.ok && extra.length === 0,
+    blocked: report.blocked.map((b) => ({ ...b, sourceRow: rows[b.row - 1]?.sourceRow })),
+    template: info ? { name: info.name, language: info.language, paramCount: info.paramCount } : null,
+    shape,
+  };
+}
+
+export type DryRunResult = {
+  /** Present only when every check passed; pass it with confirmToken to startCampaign. */
+  campaignId?: string;
+  confirmToken?: string;
+  pilotSize?: number;
+  ok: boolean;
+  checks: PreflightCheck[];
+  summary: PreflightReport<DryRunRow>["summary"];
+  blocked: (BlockedRow & { sourceRow?: number })[];
+  blockedTruncated: boolean;
+};
+
+/**
+ * Opts out every number whose send failed in any earlier campaign, so no later campaign or retry sends to it.
+ * Runs before each dry run and each start. Returns how many numbers were newly saved.
+ */
+async function suppressFailedSends(store: Store): Promise<number> {
+  const ids = (await store.mkGet<string[]>("camp:ids")) ?? [];
+  const failed = new Map<string, number>();
+  for (const id of ids) {
+    const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+    for (const o of outcomes) if (!o.ok) failed.set(o.phone, o.errorCode ?? 0);
+  }
+  const already = await store.optedOut([...failed.keys()]);
+  let saved = 0;
+  for (const [phone, code] of failed) {
+    if (already.has(phone)) continue;
+    await store.recordOptOut(phone, `send failed${code ? ` (${code})` : ""}`);
+    saved++;
+  }
+  return saved;
+}
+
+/** Screens the list and, when it passes, saves the campaign (not started) and returns its confirmation token. Sends nothing. */
+export async function createDryRun(deps: CampaignDeps, input: { template: { name: string; language: string }; rows: readonly DryRunRow[]; send?: SendOptions; retry?: string[] }): Promise<DryRunResult> {
+  const now = (deps.now ?? Date.now)();
+  const send = cleanSend(input.send);
+  await suppressFailedSends(deps.store);
+  const s = await screen(deps, input.template, input.rows, now, send, new Set(input.retry ?? []));
+  const result: DryRunResult = {
+    ok: s.ok,
+    checks: s.checks,
+    summary: s.report.summary,
+    blocked: s.blocked.slice(0, BLOCKED_SAMPLE),
+    blockedTruncated: s.blocked.length > BLOCKED_SAMPLE,
+  };
+  if (!s.ok || !s.template) return { ...result, ok: false };
+
+  const id = randomUUID();
+  const recipients: CampaignRecipient[] = s.report.accepted.map((a) => ({
+    phone: a.phone,
+    params: a.params ?? [],
+    ...(a.headerParam?.trim() ? { headerParam: a.headerParam.trim() } : {}),
+    ...(a.buttonParam?.trim() ? { buttonParam: a.buttonParam.trim() } : {}),
+    ...(a.couponParam?.trim() ? { couponParam: a.couponParam.trim() } : {}),
+    sourceRow: a.sourceRow,
+    consentSource: a.consentSource!,
+    consentAt: iso(a.consentAt!),
+  }));
+  const total = recipients.length;
+  const c: Campaign = {
+    id,
+    createdAt: now,
+    status: "dry_run",
+    template: s.template,
+    ...(s.shape ? { shape: s.shape } : {}),
+    ...(send ? { send } : {}),
+    ...(input.retry?.length ? { retry: input.retry } : {}),
+    confirmToken: randomUUID(),
+    total,
+    cursor: 0,
+    pilotSize: Math.min(total, Math.max(PILOT_MIN, Math.ceil(total * PILOT_SHARE))),
+    pilotDone: false,
+    evalFrom: 0,
+    skipped: 0,
+    skippedBy: {},
+  };
+  await deps.store.mkSet(key(id, ":r"), recipients);
+  await save(deps.store, c, []);
+  const ids = (await deps.store.mkGet<string[]>("camp:ids")) ?? [];
+  await deps.store.mkSet("camp:ids", [id, ...ids].slice(0, 50));
+  return { ...result, campaignId: id, confirmToken: c.confirmToken, pilotSize: c.pilotSize };
+}
+
+export type StartResult = { ok: true; campaign: CampaignView } | { ok: false; error: string; checks?: PreflightCheck[] };
+
+/** Starts a dry-run campaign after re-screening with current data. Sends nothing yet; call advanceCampaign next. */
+export async function startCampaign(deps: CampaignDeps, id: string, token: string): Promise<StartResult> {
+  const { store } = deps;
+  const now = (deps.now ?? Date.now)();
+  const c = await load(store, id);
+  if (!c) return { ok: false, error: "Campaign not found." };
+  if (c.status !== "dry_run") return { ok: false, error: `Campaign is already ${c.status}; a dry run can be started once.` };
+  if (!c.confirmToken || token !== c.confirmToken) return { ok: false, error: "The confirmation token does not match this dry run." };
+  if (now - c.createdAt > TOKEN_TTL_MS) return { ok: false, error: "The dry run is older than 24 hours; run it again so the checks use current data." };
+
+  const stored = (await store.mkGet<CampaignRecipient[]>(key(id, ":r"))) ?? [];
+  await suppressFailedSends(store);
+  const s = await screen(deps, c.template, stored, now, c.send, new Set(c.retry ?? []));
+  if (!s.ok) return { ok: false, error: "The checks no longer pass; nothing was started.", checks: s.checks.filter((x) => !x.ok) };
+
+  if (!(await store.mkLock("active", 14 * 24 * 60 * 60))) return { ok: false, error: "Another campaign holds the account." };
+  await store.mkSet("camp:active", id);
+
+  const accepted = new Set(s.report.accepted.map((a) => a.phone));
+  const recipients = stored.filter((r) => accepted.has(r.phone));
+  await store.mkSet(key(id, ":r"), recipients);
+  c.total = recipients.length;
+  c.pilotSize = Math.min(c.total, Math.max(PILOT_MIN, Math.ceil(c.total * PILOT_SHARE)));
+  c.status = "running";
+  c.startedAt = now;
+  delete c.confirmToken;
+  await save(store, c);
+  return { ok: true, campaign: view(c, []) };
+}
+
+// -- sending -----------------------------------------------------------------
+
+export type AdvanceOptions = {
+  /** How long this call may keep sending. Default 45 s, under the 60 s function limit. */
+  budgetMs?: number;
+  batch?: number;
+  perSecond?: number;
+  pilotWaitMs?: number;
+};
+
+function halt(c: Campaign, reason: string, code?: number) {
+  c.status = "halted";
+  c.haltReason = reason;
+  c.haltCode = code;
+}
+
+/** Sends the next slice of a started campaign. Safe to call repeatedly; a second call while one runs does nothing. */
+export async function advanceCampaign(deps: CampaignDeps, id: string, opts: AdvanceOptions = {}): Promise<CampaignView> {
+  const { graph, store } = deps;
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? defaultSleep;
+  const budgetMs = opts.budgetMs ?? 45_000;
+  const batchSize = opts.batch ?? 25;
+  const gapMs = 1000 / (opts.perSecond ?? 10);
+  const breaker = deps.breaker ?? DEFAULT_BREAKER;
+
+  const c = await load(store, id);
+  if (!c) throw new Error("Campaign not found.");
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  if (c.status !== "running" && c.status !== "waiting") return view(c, outcomes);
+  if (c.status === "waiting" && c.resumeAt && now() < c.resumeAt) return view(c, outcomes);
+  if (!(await store.mkLock(`tick:${id}`, Math.ceil(budgetMs / 1000) + 30))) return view(c, outcomes, { busy: true });
+
+  const deadline = now() + budgetMs;
+  try {
+    const recipients = (await store.mkGet<CampaignRecipient[]>(key(id, ":r"))) ?? [];
+    c.status = "running";
+    delete c.resumeAt;
+    let quality: string | undefined;
+    // Fetched once per call so the inbox shows the message itself; null falls back to the name.
+    const rawTemplate = await settle(() => graph.getTemplate(c.template.name, c.template.language));
+    const components = (rawTemplate as any)?.components as any[] | undefined;
+
+    while (c.status === "running" && c.cursor < c.total && now() < deadline) {
+      const stop = await store.mkGet<"pause" | "cancel">(key(id, ":stop"));
+      if (stop) {
+        applyStop(c, stop);
+        await store.mkSet(key(id, ":stop"), null);
+        break;
+      }
+      await refreshStatuses(store, outcomes, STATUS_WINDOW);
+      const info = await settle(() => graph.phoneInfo());
+      quality = (info as any)?.quality_rating;
+      const verdict = evaluate(outcomes.slice(c.evalFrom), quality, breaker);
+      if (verdict.halt) {
+        halt(c, verdict.reason, verdict.code);
+        break;
+      }
+
+      // Unique recipients messaged in the last 24 hours, including sends from this call.
+      const limit = dailyLimit(info as any);
+      const windowSet = await store.recentMarketing(DAY_MS, now());
+      const end = Math.min(c.cursor + batchSize, c.pilotDone ? c.total : c.pilotSize);
+      const batch = recipients.slice(c.cursor, end);
+      const phones = batch.map((r) => r.phone);
+      const [optedOut, last] = await Promise.all([store.optedOut(phones), store.lastMarketing(phones)]);
+
+      for (const r of batch) {
+        if (now() >= deadline) break;
+        // already_sent: the process died after sending but before the cursor was saved; the send was recorded
+        const lastAt = last.get(r.phone);
+        const skip = optedOut.has(r.phone) ? "opted_out" : lastAt !== undefined && lastAt >= (c.startedAt ?? Infinity) ? "already_sent" : null;
+        if (skip) {
+          c.skipped++;
+          c.skippedBy[skip] = (c.skippedBy[skip] ?? 0) + 1;
+          c.cursor++;
+          continue;
+        }
+
+        // Over the 24-hour cap: stop here, keep the cursor on this recipient, and retry later.
+        if (!windowSet.has(r.phone) && windowSet.size >= limit) {
+          c.status = "waiting";
+          c.resumeAt = now() + CAPACITY_RETRY_MS;
+          break;
+        }
+
+        const at = now();
+        let outcome: Outcome;
+        try {
+          const res = await graph.sendMessage(r.phone, templateMessage(c.template, r, c.shape, c.send));
+          outcome = { phone: r.phone, at, ok: true, messageId: res.messageId };
+          try {
+            await store.recordMarketingSend(r.phone, at);
+            if (res.messageId) {
+              await store.saveMessage({
+                id: res.messageId,
+                waId: res.waId ?? r.phone,
+                direction: "out",
+                type: "template",
+                text: renderTemplateText(components, r.params) ?? `[template ${c.template.name}] ${r.params.join(" | ")}`.trim(),
+                timestamp: Math.floor(at / 1000),
+                status: "sent",
+                source: "api",
+              });
+            }
+          } catch (err) {
+            console.error("campaign bookkeeping failed after a send", err);
+          }
+        } catch (e) {
+          outcome = { phone: r.phone, at, ok: false, errorCode: e instanceof GraphError ? e.code : undefined, error: e instanceof Error ? e.message : String(e) };
+        }
+        outcomes.push(outcome);
+        if (outcome.ok) windowSet.add(r.phone);
+        c.cursor++;
+
+        // Judged after every message, not only failures: the failure rate starts counting at minAttempts, which a success can be the one to reach.
+        const v = evaluate(outcomes.slice(c.evalFrom), quality, breaker);
+        if (v.halt) {
+          halt(c, v.reason, v.code);
+          break;
+        }
+        await sleep(gapMs);
+      }
+      await save(store, c, outcomes);
+
+      if (c.status === "running" && !c.pilotDone && c.cursor >= c.pilotSize) {
+        c.pilotDone = true;
+        if (c.cursor < c.total) {
+          c.status = "waiting";
+          c.resumeAt = now() + (opts.pilotWaitMs ?? PILOT_WAIT_MS);
+        }
+      }
+    }
+
+    if (c.status === "running" && c.cursor >= c.total) {
+      await refreshStatuses(store, outcomes, STATUS_WINDOW);
+      c.status = "completed";
+      c.finishedAt = now();
+    }
+    await save(store, c, outcomes);
+    // The helpers above change c.status in ways the compiler's narrowing cannot follow.
+    const final = c.status as CampaignStatus;
+    if (final === "completed" || final === "cancelled") await release(store, id);
+    return view(c, outcomes);
+  } finally {
+    await store.mkUnlock(`tick:${id}`);
+  }
+}
+
+// -- control -----------------------------------------------------------------
+
+function applyStop(c: Campaign, mode: "pause" | "cancel") {
+  if (mode === "cancel") {
+    c.status = "cancelled";
+    c.finishedAt = Date.now();
+  } else {
+    halt(c, "Paused by a person.");
+  }
+}
+
+/** Pauses or cancels a live campaign. If a slice is running it stops at its next batch. */
+export async function stopCampaign(deps: CampaignDeps, id: string, mode: "pause" | "cancel"): Promise<CampaignView> {
+  const { store } = deps;
+  const c = await load(store, id);
+  if (!c) throw new Error("Campaign not found.");
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  if (!LIVE.includes(c.status) && c.status !== "dry_run") return view(c, outcomes);
+  if (mode === "pause" && c.status === "halted") return view(c, outcomes); // keep the breaker's reason
+  if (c.status === "dry_run") {
+    if (mode === "cancel") {
+      c.status = "cancelled";
+      c.finishedAt = (deps.now ?? Date.now)();
+      delete c.confirmToken;
+      await save(store, c);
+    }
+    return view(c, outcomes);
+  }
+  await store.mkSet(key(id, ":stop"), mode);
+  if (await store.mkLock(`tick:${id}`, 30)) {
+    try {
+      const fresh = (await load(store, id)) ?? c;
+      await store.mkSet(key(id, ":stop"), null);
+      if (LIVE.includes(fresh.status) && !(mode === "pause" && fresh.status === "halted")) {
+        applyStop(fresh, mode);
+        await save(store, fresh);
+        if (fresh.status === "cancelled") await release(store, id);
+      }
+      return view(fresh, outcomes);
+    } finally {
+      await store.mkUnlock(`tick:${id}`);
+    }
+  }
+  return view(c, outcomes, { busy: true });
+}
+
+export type ResumeResult = { ok: true; campaign: CampaignView } | { ok: false; error: string };
+
+/** Resumes a halted campaign. The number must be GREEN (or still unrated) again; the breaker then judges only what is sent from here on. */
+export async function resumeCampaign(deps: CampaignDeps, id: string): Promise<ResumeResult> {
+  const { graph, store } = deps;
+  const c = await load(store, id);
+  if (!c) return { ok: false, error: "Campaign not found." };
+  if (c.status !== "halted") return { ok: false, error: `Campaign is ${c.status}, not halted.` };
+  const info = await settle(() => graph.phoneInfo());
+  const quality = (info as any)?.quality_rating;
+  if (!qualityAllowsSending(quality, deps.breaker ?? DEFAULT_BREAKER)) return { ok: false, error: `Number quality is "${quality ?? "unknown"}"; resume only when it is back to GREEN.` };
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  c.status = "running";
+  c.evalFrom = outcomes.length;
+  delete c.haltReason;
+  delete c.haltCode;
+  await store.mkSet(key(id, ":stop"), null);
+  await save(store, c);
+  return { ok: true, campaign: view(c, outcomes) };
+}
+
+// -- reporting ---------------------------------------------------------------
+
+const mask = (p: string) => `${p.slice(0, 5)}****${p.slice(-3)}`;
+
+export type CampaignReport = CampaignView & {
+  delivered: number;
+  read: number;
+  /** accepted by Meta, no delivery update yet */
+  pending: number;
+  failureRate: number;
+  errors: { code: number | null; count: number; meaning?: string }[];
+  /** phone numbers are masked */
+  failureSample: { phone: string; code?: number; error?: string }[];
+};
+
+export async function campaignReport(deps: CampaignDeps, id: string): Promise<CampaignReport | null> {
+  const { store } = deps;
+  const c = await load(store, id);
+  if (!c) return null;
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  await refreshStatuses(store, outcomes);
+  const accepted = outcomes.filter((o) => o.ok && o.messageId);
+  const msgs = await store.messagesByIds(accepted.map((o) => o.messageId!));
+  const delivered = msgs.filter((m) => m?.status === "delivered" || m?.status === "read").length;
+  const read = msgs.filter((m) => m?.status === "read").length;
+  const byCode = new Map<number | null, number>();
+  for (const o of outcomes.filter((x) => !x.ok)) byCode.set(o.errorCode ?? null, (byCode.get(o.errorCode ?? null) ?? 0) + 1);
+  return {
+    ...view(c, outcomes),
+    delivered,
+    read,
+    pending: accepted.length - delivered,
+    failureRate: outcomes.length ? Number(((outcomes.length - accepted.length) / outcomes.length).toFixed(4)) : 0,
+    errors: [...byCode].map(([code, count]) => ({ code, count, meaning: code ? HALT_CODES[code] : undefined })).sort((a, b) => b.count - a.count),
+    failureSample: outcomes
+      .filter((o) => !o.ok)
+      .slice(0, 20)
+      .map((o) => ({ phone: mask(o.phone), code: o.errorCode, error: o.error })),
+  };
+}
+
+export type UndeliveredRow = { phone: string; state: "failed" | "not_delivered" | "not_sent"; code?: number; error?: string };
+
+/**
+ * Every recipient of a campaign that has not reached "delivered" or "read": sends Meta refused,
+ * sends Meta accepted but never confirmed as delivered, and recipients not reached yet.
+ */
+export async function undeliveredRecipients(deps: CampaignDeps, id: string) {
+  const { store } = deps;
+  const c = await load(store, id);
+  if (!c) return null;
+  const outcomes = (await store.mkGet<Outcome[]>(key(id, ":o"))) ?? [];
+  await refreshStatuses(store, outcomes);
+  const recipients = (await store.mkGet<CampaignRecipient[]>(key(id, ":r"))) ?? [];
+  const accepted = outcomes.filter((o) => o.ok && o.messageId);
+  const msgs = await store.messagesByIds(accepted.map((o) => o.messageId!));
+  const statusById = new Map(accepted.map((o, i) => [o.messageId!, msgs[i]?.status] as const));
+  const byPhone = new Map(outcomes.map((o) => [o.phone, o] as const));
+
+  const list: UndeliveredRow[] = [];
+  const picked: CampaignRecipient[] = [];
+  for (const r of recipients) {
+    const o = byPhone.get(r.phone);
+    if (!o) {
+      list.push({ phone: r.phone, state: "not_sent" });
+    } else if (!o.ok) {
+      list.push({ phone: r.phone, state: "failed", code: o.errorCode, error: o.error });
+    } else {
+      const st = statusById.get(o.messageId!);
+      if (st === "delivered" || st === "read") continue;
+      list.push({ phone: r.phone, state: "not_delivered" });
+    }
+    picked.push(r);
+  }
+  return { campaign: c, list, recipients: picked };
+}
+
+/** An Excel file of the undelivered rows. Phone numbers are stored as text, so Excel does not turn them into 9.66E+11. */
+export async function undeliveredXlsx(list: readonly UndeliveredRow[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("undelivered");
+  ws.columns = [
+    { header: "phone", key: "phone", width: 18 },
+    { header: "state", key: "state", width: 16 },
+    { header: "error_code", key: "code", width: 12 },
+    { header: "error", key: "error", width: 60 },
+  ];
+  ws.getColumn("phone").numFmt = "@";
+  for (const r of list) {
+    ws.addRow({ phone: String(r.phone), state: r.state, code: r.code ?? null, error: r.error ?? "" });
+  }
+  ws.getRow(1).font = { bold: true };
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** Builds a new dry run from the undelivered recipients of a campaign. Sends nothing; the usual checks and start apply. */
+export async function retryUndelivered(deps: CampaignDeps, id: string): Promise<DryRunResult | null> {
+  const u = await undeliveredRecipients(deps, id);
+  if (!u) return null;
+  const rows: DryRunRow[] = u.recipients.map((r) => ({
+    phone: r.phone,
+    params: r.params,
+    headerParam: r.headerParam,
+    buttonParam: r.buttonParam,
+    couponParam: r.couponParam,
+    sourceRow: r.sourceRow,
+    consentSource: r.consentSource,
+    consentAt: r.consentAt,
+  }));
+  return createDryRun(deps, {
+    template: { name: u.campaign.template.name, language: u.campaign.template.language },
+    rows,
+    send: u.campaign.send,
+    retry: u.recipients.map((r) => r.phone),
+  });
+}
+
+export async function listCampaigns(deps: CampaignDeps, limit = 20): Promise<CampaignView[]> {
+  const ids = ((await deps.store.mkGet<string[]>("camp:ids")) ?? []).slice(0, limit);
+  const out: CampaignView[] = [];
+  for (const id of ids) {
+    const c = await load(deps.store, id);
+    if (c) out.push(view(c, (await deps.store.mkGet<Outcome[]>(key(id, ":o"))) ?? []));
+  }
+  return out;
+}
